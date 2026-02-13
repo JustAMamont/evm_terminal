@@ -1,0 +1,109 @@
+name: Build and Release EVM_TERMINAL
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build_and_release:
+    permissions:
+      contents: write
+    name: Build ${{ matrix.os }} (${{ matrix.arch_name }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'macos-15-intel' && 'arch -x86_64 bash -e {0}' || 'bash' }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch_name: x86_64
+            artifact_name: EVM_TERMINAL_Linux_x86_64.zip
+            build_dir: EVM_TERMINAL_Linux_x86_64
+          - os: windows-latest
+            arch_name: x86_64
+            artifact_name: EVM_TERMINAL_Windows_x86_64.zip
+            build_dir: EVM_TERMINAL_Windows_x86_64
+          - os: macos-15-intel
+            arch_name: x86_64
+            rust_target: x86_64-apple-darwin
+            artifact_name: EVM_TERMINAL_MacOS_x86_64.zip
+            build_dir: EVM_TERMINAL_MacOS_x86_64
+          - os: macos-14
+            arch_name: arm64
+            rust_target: aarch64-apple-darwin
+            artifact_name: EVM_TERMINAL_MacOS_arm64.zip
+            build_dir: EVM_TERMINAL_MacOS_arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust_target }}
+
+      - name: Set up Python
+        if: runner.os != 'Linux'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies (Windows/Mac)
+        if: runner.os != 'Linux'
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install maturin Pillow
+          
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            grep -v -e "uvloop" -e "patchelf" requirements.txt > requirements-filtered.txt
+            python3 -m pip install -r requirements-filtered.txt
+          else 
+            grep -v "patchelf" requirements.txt > requirements-filtered.txt
+            python3 -m pip install -r requirements-filtered.txt
+          fi
+
+      - name: Build Protected Binary (Windows/Mac)
+        if: runner.os != 'Linux'
+        env:
+          TARGET_ARCH: ${{ runner.os == 'macOS' && matrix.arch_name || '' }}
+        run: python3 build.py
+
+      - name: Build Protected Binary (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          # УДАЛЕНО: chmod +x updater (этого файла нет)
+          docker run --rm -v "$(pwd)":/io python:3.12-bullseye bash -c "chmod +x /io/build_linux.sh && /io/build_linux.sh"
+
+      - name: Archive Artifact
+        id: archive
+        shell: bash
+        run: |
+          BUILD_DIR=${{ matrix.build_dir }}
+          ARTIFACT_NAME=${{ matrix.artifact_name }}
+
+          if [ ! -d "$BUILD_DIR" ]; then
+             echo "Error: Directory $BUILD_DIR does not exist."
+             echo "Contents of current directory:"
+             ls -R
+             exit 1
+          fi
+
+          if [[ "${{ runner.os }}" == "Linux" || "${{ runner.os }}" == "macOS" ]]; then
+            zip -r $ARTIFACT_NAME $BUILD_DIR
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            pwsh -Command "Compress-Archive -Path $BUILD_DIR -DestinationPath $ARTIFACT_NAME"
+          fi
+          
+      - name: Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ matrix.artifact_name }}

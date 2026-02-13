@@ -1,0 +1,63 @@
+# 1. ЗАПРЕЩАЕМ ВООБЩЕ ВСЁ ПО УМОЛЧАНИЮ
+*
+# 2. Разрешаем заходить внутрь папок
+!*/
+# 3. РАЗРЕШАЕМ НУЖНЫЕ ПАПКИ СО ВСЕМ СОДЕРЖИМЫМ 
+!bot/**
+!tui/**
+!utils/**
+!.github/**
+!contract/**
+!media/**
+!tests/**
+!networks/**
+# --- RUST MODULE (Новое) ---
+# Разрешаем исходники Rust
+!rust_module/**
+# Но явно запрещаем папку сборки Rust (она весит сотни мегабайт)
+__pycache__
+rust_module/target/
+test_server/target/
+updater_rust/target/
+logs
+
+_internal
+# ---------------------------
+# 4. РАЗРЕШАЕМ НУЖНЫЕ ФАЙЛЫ В КОРНЕ
+!main.py
+!requirements.txt
+!build.py
+!build_linux.sh
+!local_build.sh
+!project_copy.py
+!.gitignore
+!README.md
+!pytest.ini
+# 5. НАСТРОЙКА ПАПКИ DATA
+!data/
+data/*
+!data/.keep
+# 6. СНОВА ЗАПРЕЩАЕМ МУСОР (Override)
+pycache/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.c
+*.log
+*.db
+
+
+.DS_Store
+# 7. ЯВНО ЗАПРЕЩАЕМ ЛИШНИЕ ПАПКИ
+env/
+venv/
+.venv/
+.idea/
+.vscode/
+build/
+dist/
+_build_zone/
+SCALPIUM_Linux_x86_64/
+# На случай если maturin создаст venv внутри
+rust_module/.venv/

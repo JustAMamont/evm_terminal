@@ -1,0 +1,27 @@
+{
+    "name": "BSC Testnet",
+    "db_path": "data/bsc_testnet.db",
+    "chain_id": 97,
+    "rpc_url": "https://data-seed-prebsc-1-s1.binance.org:8545/",
+    "native_currency_symbol": "BNB",
+    "native_currency_address": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "explorer_url": "https://testnet.bscscan.com/",
+    "dex_router_address": "0x9f47ccb579626b683ca3b9daa61eef6f17ce2439",
+    "v2_factory_address": "0x6725F303b657a9451d8BA641348b6761A6CC7a17",
+    "v3_factory_address": "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+    "v2_router_address": "0xD99D1c33F9fC3444f8101754aBC46c52416550D1",
+    "v3_quoter_address": "0xbC203d7f83677c7ed3F7acEc959963E7F4ECC5C2",
+    "public_rpc_urls": [
+        "https://data-seed-prebsc-1-s1.binance.org:8545/",
+        "https://data-seed-prebsc-2-s1.binance.org:8545/",
+        "https://data-seed-prebsc-1-s2.binance.org:8545/",
+        "https://data-seed-prebsc-2-s2.binance.org:8545/"
+    ],
+    "fee_receiver": "0xE54094d99d71F87D1f986E23F9ae3d1ABcD56647",
+    "default_quote_currency": "WBNB",
+    "quote_tokens": {
+        "WBNB": "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd",
+        "BUSD": "0x78867bbeef44f2326bf3816fb87fcc56783aefd7",
+        "USDT": "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd"
+    }
+}
