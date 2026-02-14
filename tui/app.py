@@ -1011,9 +1011,9 @@ class TradingApp(App):
                 if RUST_AVAILABLE:
                     try:
                         rpc_url = self.cache.get_config().get('rpc_url', self.bot_service.config.RPC_URL) # type: ignore
-                        await asyncio.to_thread(dexbot_core.add_wallet_to_monitor, new_wallet_address, rpc_url) # type: ignore
+                        await asyncio.to_thread(dexbot_core.add_wallet_to_monitor, new_wallet_address) # type: ignore
                         await log.info(f"[TUI] Кошелек {new_wallet_address} добавлен в мониторинг Rust-ядра.")
-                        await asyncio.to_thread(dexbot_core.force_resync_nonce, new_wallet_address, rpc_url) # type: ignore
+                        await asyncio.to_thread(dexbot_core.force_resync_nonce, new_wallet_address) # type: ignore
                     except Exception as e:
                         await log.error(f"[TUI] Не удалось добавить кошелек в мониторинг Rust: {e}")
                 
