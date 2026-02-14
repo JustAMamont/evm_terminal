@@ -13,11 +13,12 @@ use crate::monitor::{
     get_pending_events, add_wallet_to_monitor, remove_wallet_from_monitor, 
     force_resync_nonce, shutdown_rust_workers,
     start_pool_scanner, stop_pool_scanner, get_best_pool_address,
-    get_all_pool_balances, clear_pool_balances, get_best_rpc_url, get_healthy_rpc_urls
+    get_all_pool_balances, clear_pool_balances, get_best_rpc_url, 
+    reset_rust_state, get_healthy_rpc_urls
 };
 use crate::execution::{execute_swap_hot, execute_batch_swap, execute_approve_hot};
 use crate::crypto::{init_or_load_keys, get_public_key};
-use crate::pnl::{start_pnl_tracker, stop_pnl_tracker, get_pnl_status};
+use crate::pnl::{start_pnl_tracker, stop_pnl_tracker, get_pnl_status, clear_all_pnl_trackers};
 
 #[pymodule]
 fn dexbot_core(_py: Python, m: &PyModule) -> PyResult<()> {
@@ -42,6 +43,8 @@ fn dexbot_core(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_healthy_rpc_urls, m)?)?;
 
     m.add_function(wrap_pyfunction!(execute_swap_hot, m)?)?;
+    m.add_function(wrap_pyfunction!(reset_rust_state, m)?)?;
+    m.add_function(wrap_pyfunction!(clear_all_pnl_trackers, m)?)?;
 
     #[pyfn(m)]
     #[pyo3(name = "execute_approve_hot")]

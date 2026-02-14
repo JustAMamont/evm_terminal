@@ -240,7 +240,8 @@ class TradingApp(App):
 
         self._is_pool_loading = False
         self._update_trade_buttons_state()
-        self.query_one("#token_metadata_display", Static).update("Token Info: -")
+        self.query_one("#token_metadata_display", Static).update("Token Info: [dim]...[/]")
+        self.query_one("#pnl_tvl_table", DataTable).clear()
 
         if Web3.is_address(token_address):
             self._is_pool_loading = True
@@ -262,7 +263,7 @@ class TradingApp(App):
 
     async def _run_recommendation_engine(self, token_address: str):
         meta_display = self.query_one("#token_metadata_display", Static)
-        meta_display.update("Token Info: [yellow blink]⏳ Analyzing...[/]")
+        meta_display.update("[dim]Analyzing...[/]")
 
         balances = {}
         for _ in range(100):
@@ -342,10 +343,7 @@ class TradingApp(App):
              self.notify(f"В паре {current_quote_sym} нет денег! Переключитесь на {best_quote_sym}", severity="error", timeout=6)
         
         else:
-            liq_color = "green" if current_pool_tvl_usd > 10000 else "yellow"
-            if current_pool_tvl_usd < 200: liq_color = "red"
-            pool_info = f"[{liq_color}]TVL: ${current_pool_tvl_usd:,.0f}[/]"
-            meta_display.update(base_text + pool_info)
+            meta_display.update(base_text)
 
     @on(Button.Pressed, "#better_pool_suggestion")
     def on_suggestion_clicked(self, event: Button.Pressed):
@@ -656,6 +654,9 @@ class TradingApp(App):
                         with Vertical(id="sell_panel"):
                             yield Label("SELL", classes="trade-panel-title")
                             yield Button("ПРОДАТЬ", variant="error", id="sell_button", disabled=True)
+
+                    yield Label("Информация о токене:", id="pnl_tvl_label")
+                    yield DataTable(id="pnl_tvl_table")
                     
                     yield Label("Активные кошельки:", id="balances_label")
                     yield DataTable(id="balances_table")
@@ -743,6 +744,7 @@ class TradingApp(App):
         self._rich_log_handler = TextualRichLogHandler(log_widget)
         await log.set_custom_handler(self._rich_log_handler.emit)
         self.query_one("#wallets_table", DataTable).add_columns("Название", "Адрес", "Статус (Клик)")
+        self.query_one("#pnl_tvl_table", DataTable).add_columns("Token", "TVL ($)", "PnL", "PnL Abs.")
         self.query_one("#balances_table", DataTable).add_columns("Кошелек", "NATIVE", "QUOTE")
         
         quote_tokens = list(self.bot_service.config.QUOTE_TOKENS.keys()) # type: ignore
@@ -785,101 +787,124 @@ class TradingApp(App):
                     status_rpc_widget = self.query_one(StatusRPC)
                     status_wallets_widget = self.query_one(StatusWallets)
                     metadata_display = self.query_one("#token_metadata_display", Static)
+                    pnl_tvl_table = self.query_one("#pnl_tvl_table", DataTable)
                 except Exception:
                     await asyncio.sleep(1)
                     continue
 
+                # 1. Системный чек (раз в 10 сек)
                 if counter % 5 == 0:
                     command = APICommand(type="system", data={"action": "health"})
                     response = await self.api_router.process_command(command, self.cache)
                     status_rpc_widget.update_content("OK" if response.status == 'success' and response.data.get('healthy') else "ERROR", True)
 
+                # 2. Проверка изменений в кошельках
                 new_wallets_data = self.cache.get_all_wallets()
                 if new_wallets_data != self.wallets_cache_ui:
                     self.wallets_cache_ui = new_wallets_data
-                    
-                    try:
-                        inp = self.query_one("#amount_input", Input)
-                        if inp.value:
-                            await self._recalculate_trade_amount(inp.value, silent=True)
-                    except: pass
-                    
-                    self.ui_update_queue.put_nowait("wallets")
-                else:
                     self.ui_update_queue.put_nowait("wallets")
                 
                 active_token = self.cache.get_active_trade_token()
                 if active_token:
                     config = self.cache.get_config()
-                    quote_symbol = config.get('default_quote_currency', self.bot_service.config.DEFAULT_QUOTE_CURRENCY) # type: ignore
-                    quote_address = self.bot_service.config.QUOTE_TOKENS.get(quote_symbol, "").lower() # type: ignore
+                    quote_symbol = config.get('default_quote_currency', self.bot_service.config.DEFAULT_QUOTE_CURRENCY)
+                    quote_address = self.bot_service.config.QUOTE_TOKENS.get(quote_symbol, "").lower()
                     
-                    token_name_str = ""
-                    try:
-                        meta = await self.cache.db.get_token_metadata(active_token)
-                        if meta and meta.get('symbol'):
-                            token_name_str = f"[bold cyan]{meta['symbol']}[/]"
-                    except: pass
+                    # Получаем корректные decimals для расчетов
+                    q_decimals = self.cache.get_token_decimals(quote_address) or 18
+                    
+                    token_symbol_plain = "TOKEN"
+                    meta = await self.cache.db.get_token_metadata(active_token)
+                    if meta and meta.get('symbol'):
+                        token_symbol_plain = meta['symbol']
                     
                     pool_info = self.cache.get_best_pool(active_token, quote_address)
-                    pool_str = ""
+                    pool_status_str = ""
 
                     if pool_info:
                         self._is_pool_loading = False 
-                        if "error" in pool_info:
-                            pool_str = "[bold red](Pool not found)[/]"
+                        if "error" in pool_info: 
+                            pool_status_str = "[bold red](No Pool)[/]"
                         else:
                             pool_type = pool_info['type']
-                            pool_fee_str = f" ({pool_info.get('fee', 0)/10000}%)" if pool_type == 'V3' else ""
-                            pool_str = f"[bold green]({pool_type}{pool_fee_str})[/]"
+                            pool_status_str = f"[bold green]({pool_type})[/]"
                     else:
                         self._is_pool_loading = True
-                        pool_str = "[yellow](Searching Pool...)[/]"
+                        pool_status_str = "[yellow](Searching...)[/]"
                     
-                    pnl_display = ""
+                    metadata_display.update(f"Active: [bold cyan]{token_symbol_plain}[/] {pool_status_str}")
+
+                    # --- TVL (Обновляется из Python кэша) ---
+                    tvl_val_str = "[dim]0[/]"
+                    if RUST_AVAILABLE and pool_info and "address" in pool_info:
+                        all_balances_raw = await asyncio.to_thread(dexbot_core.get_all_pool_balances) # type: ignore
+                        if all_balances_raw:
+                            all_balances = {k.strip('"').strip("'").lower(): v for k, v in all_balances_raw.items()}
+                            pool_addr_lower = pool_info['address'].lower()
+                            if pool_addr_lower in all_balances:
+                                balance_wei = float(all_balances[pool_addr_lower])
+                                price = self.cache.get_quote_price(quote_symbol) or 1.0
+                                tvl_usd = (balance_wei / (10**q_decimals)) * price * 2
+                                tvl_val_str = f"[green]${tvl_usd:,.0f}[/]"
+
+                    # --- PnL (Обновляется напрямую из Rust Core) ---
+                    pnl_percent_str, pnl_abs_str = "[dim]0%[/]", "[dim]0.00[/]"
+                    total_balance_of_token = 0.0
+                    
                     if RUST_AVAILABLE and self.wallets_cache_ui:
-                        total_cost = 0.0
-                        total_value = 0.0
-                        is_any_loading = False
+                        total_cost_usd, total_value_usd, any_loading = 0.0, 0.0, False
                         
                         for wallet in self.wallets_cache_ui:
+                            w_addr = wallet['address']
+                            total_balance_of_token += self.cache.get_wallet_balances(w_addr).get(active_token.lower(), 0.0)
+                            
                             if not wallet.get('enabled'): continue
                             
-                            try:
-                                pnl_data = await asyncio.to_thread(dexbot_core.get_pnl_status, wallet['address'], active_token) # type: ignore
-                                if pnl_data:
-                                    _, val_str, cost_str, loading = pnl_data
-                                    if loading: is_any_loading = True
-                                    total_value += float(val_str) / 10**18
-                                    total_cost += float(cost_str) / 10**18
-                            except Exception: pass
+                            # Запрашиваем состояние у Rust
+                            pnl_data = await asyncio.to_thread(dexbot_core.get_pnl_status, w_addr, active_token) # type: ignore
+                            if pnl_data:
+                                p_pct, val_wei, cost_wei, is_load = pnl_data
+                                if is_load: any_loading = True
+                                
+                                # ВАЖНО: Делим на ПРАВИЛЬНЫЕ decimals квотируемого токена!
+                                total_value_usd += float(val_wei) / (10**q_decimals)
+                                total_cost_usd += float(cost_wei) / (10**q_decimals)
                         
-                        if total_cost > 0:
-                            abs_pnl = total_value - total_cost
-                            pnl_percent = (abs_pnl / total_cost) * 100.0
+                        if total_balance_of_token <= 0:
+                            pnl_percent_str, pnl_abs_str = "[dim]SOLD[/]", "[dim]0.00[/]"
+                        elif any_loading:
+                            pnl_percent_str, pnl_abs_str = "[yellow]Calc...[/]", "[yellow]...[/]"
+                        elif total_cost_usd > 0:
+                            abs_pnl = total_value_usd - total_cost_usd
+                            pnl_pct = (abs_pnl / total_cost_usd) * 100.0
                             color = "green" if abs_pnl >= 0 else "red"
                             sign = "+" if abs_pnl >= 0 else ""
-                            
-                            pnl_str = f"{sign}{pnl_percent:.2f}% ({sign}{abs_pnl:.4f} {quote_symbol})"
-                            
-                            if is_any_loading:
-                                pnl_display = f" [dim]PnL: Calc...[/]"
-                            else:
-                                pnl_display = f" [bold {color}]PnL: {pnl_str}[/]"
-                                
-                    metadata_display.update(f"Token Info: {token_name_str} {pool_str}{pnl_display}")
+                            pnl_percent_str = f"[{color}]{sign}{pnl_pct:.2f}%[/]"
+                            pnl_abs_str = f"[{color}]{sign}{abs_pnl:.12f} {quote_symbol}[/]"
+                        else:
+                            pnl_percent_str, pnl_abs_str = "0%", "0.00"
+
+                    # Принудительное обновление строк таблицы
+                    pnl_tvl_table.clear()
+                    pnl_tvl_table.add_row(
+                        token_symbol_plain, 
+                        Text.from_markup(tvl_val_str), 
+                        Text.from_markup(pnl_percent_str), 
+                        Text.from_markup(pnl_abs_str)
+                    )
+                else:
+                    metadata_display.update("Token Info: [dim]None[/]")
+                    pnl_tvl_table.clear()
                 
                 self._update_trade_buttons_state()
-                
                 has_active = any(w.get('enabled') for w in self.wallets_cache_ui)
                 status_wallets_widget.update_content(has_active)
                 
                 counter += 1
             except Exception as e:
-                if "No nodes match" not in str(e):
-                    await log.error(f"Ошибка в цикле наблюдения за статусом: {e}")
+                await log.error(f"UI Loop Error: {e}")
             
-            await asyncio.sleep(2) 
+            await asyncio.sleep(1.0) 
     
 
     async def ui_updater_worker(self):

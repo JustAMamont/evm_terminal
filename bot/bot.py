@@ -81,30 +81,56 @@ async def load_last_network(db_manager: DatabaseManager, available_networks: lis
 async def run_bot_instance(network_name: str, available_networks: list) -> Optional[str]:
     """Запуск одного экземпляра бота для конкретной сети."""
     global TUI_APP_INSTANCE
+    
+    # 1. ПОЛНЫЙ СБРОС RUST CORE ПЕРЕД ЗАПУСКОМ (Глобальная зачистка памяти)
+    if dexbot_core:
+        try:
+            # Сигнал на остановку старых потоков
+            dexbot_core.shutdown_rust_workers()
+            # Пауза, чтобы потоки успели прочитать флаг и выйти из циклов
+            await asyncio.sleep(0.5) 
+            
+            # Сброс всех статических переменных (нонсы, RPC-пул, балансы пулов)
+            dexbot_core.reset_rust_state()
+            # Удаление всех старых воркеров PnL
+            dexbot_core.clear_all_pnl_trackers()
+            
+            await log.info(f"♻️ Rust Core полностью очищен для новой сети: {network_name.upper()}")
+        except Exception as e:
+            print(f"Ошибка при очистке Rust Core: {e}")
+
+    # 2. ЗАГРУЗКА КОНФИГУРАЦИИ
+    # Загружаем настройки сети напрямую из защищенного Rust-ядра
     network_settings = load_resource_bundle(network_name)
     app_config = Config(network_settings)
-    app_config.CURRENT_VERSION = CURRENT_VERSION # type: ignore
+    app_config.CURRENT_VERSION = CURRENT_VERSION 
     
+    # Определение путей (учитываем упаковку в exe)
     if getattr(sys, 'frozen', False):
         application_path = Path(sys.executable).parent.resolve() 
     else:
         application_path = Path(__file__).parent.parent.resolve()
     os.chdir(application_path)
     
+    # 3. ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ
     db_manager = DatabaseManager(
         db_path=app_config.DB_PATH,
         global_db_path="data/global.db"
     )
     await db_manager.connect()
     
+    # 4. АВТОРИЗАЦИЯ И РАЗБЛОКИРОВКА КЛЮЧЕЙ
     try:
+        # Получаем мастер-пароль от пользователя
         master_password = await secure_db_unlock(db_manager, network_name)
+        
         if dexbot_core:
             try:
-                dexbot_core.init_or_load_keys("data/bot_id.key", master_password) # type: ignore
-                await log.info("🔐 dexbot_core инициализирован.")
+                # Инициализируем ключи в Rust для подписи транзакций
+                dexbot_core.init_or_load_keys("data/bot_id.key", master_password)
+                await log.info("🔐 dexbot_core (Security) инициализирован.")
             except Exception as e:
-                await log.critical(f"Ошибка dexbot_core: {e}")
+                await log.critical(f"Ошибка инициализации ключей Rust: {e}")
                 sys.exit(1)
         
     except KeyboardInterrupt:
@@ -112,15 +138,18 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
         except: pass 
         os._exit(0)
     except Exception as e:
-        print(f"\nКритическая ошибка инициализации: {e}")
+        print(f"\nКритическая ошибка авторизации: {e}")
         await db_manager.close()
         sys.exit(1)
 
     await log.info(f"--- Запуск сети: {app_config.NAME} ---")
     
+    # 5. ИНИЦИАЛИЗАЦИЯ КЭША И СЕРВИСОВ
+    # GlobalCache создается с нуля — старые балансы Python-памяти обнуляются
     cache = GlobalCache(db_manager)
     await cache.initialize()
 
+    # Проверка настроек в БД (если сеть новая — записываем дефолты)
     config_from_db = cache.get_config()
     if not config_from_db.get('rpc_url'):
         default_settings = {
@@ -140,29 +169,42 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
     public_rpc_urls = app_config.PUBLIC_RPC_URLS
     
     notification_queue = asyncio.Queue()
+    
+    # Создаем сервисы бота
     bot_service = BotService(cache=cache, notification_queue=notification_queue, config=app_config)
     market_data_service = MarketDataService(cache=cache, config=app_config)
     
+    # Устраняем циклическую зависимость
     market_data_service.bot_service = bot_service
     
+    # 6. НАСТРОЙКА API ROUTER (Внутренние команды TUI -> Logic)
     api_router = APIRouter()
     api_router.register_route('trading', TradingEndpoint(cache=cache, bot_service=bot_service).execute)
     api_router.register_route('wallets', WalletsEndpoint(cache=cache).execute)
     api_router.register_route('system', SystemEndpoint(cache=cache).execute)
     api_router.register_route('config', ConfigEndpoint(cache=cache).execute)
     
+    # 7. ЗАПУСК RUST WORKERS (Мониторинг блокчейна)
     if dexbot_core:
         all_wallets = cache.get_all_wallets()
         wallet_addresses = [w['address'] for w in all_wallets]
         try:
-            dexbot_core.start_state_workers(private_rpc_url, public_rpc_urls, wallet_addresses, app_config.WSS_URL) # type: ignore
-            await log.info(f"<green>---  CoreState с RPC Pool запущен ---</green>")
+            # Запускаем пул RPC, монитор газа и нонсов в Rust
+            dexbot_core.start_state_workers(
+                private_rpc_url, 
+                public_rpc_urls, 
+                wallet_addresses, 
+                app_config.WSS_URL
+            )
+            await log.info(f"<green>--- CoreState (Rust) успешно запущен ---</green>")
         except Exception as e:
-            await log.error(f"Failed to start Rust workers: {e}")
+            await log.error(f"Не удалось запустить воркеры Rust: {e}")
     
+    # Запускаем фоновые задачи Python
     bot_service.start()
     market_data_service.start()
 
+    # 8. ЗАПУСК ИНТЕРФЕЙСА (TUI)
     TUI_APP_INSTANCE = TradingApp(
         api_router=api_router, 
         cache=cache, 
@@ -173,22 +215,33 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
         available_networks=available_networks
     )
     
+    # Ожидаем завершения работы приложения (вернет имя следующей сети или None)
     next_network = await TUI_APP_INSTANCE.run_async()
     TUI_APP_INSTANCE = None
     
-    await log.info("Остановка сервисов...")
+    # 9. КОРРЕКТНОЕ ЗАВЕРШЕНИЕ (Cleanup)
+    await log.info("Остановка сервисов текущей сети...")
+    
+    # Сохраняем состояние балансов перед выходом
     await cache.dump_state_to_db()
+    # Запоминаем последнюю сеть в глобальной БД
     await save_last_network(db_manager, network_name)
     
+    # Останавливаем асинхронные воркеры Python
     bot_service.stop()
     await market_data_service.stop()
     
+    # Ждем завершения всех задач Python, чтобы не было конфликтов с новой сетью
     all_workers = bot_service.workers + market_data_service.workers
     if all_workers:
-        try: await asyncio.wait_for(asyncio.gather(*all_workers, return_exceptions=True), timeout=2.0)
-        except: pass
+        try: 
+            await asyncio.wait_for(asyncio.gather(*all_workers, return_exceptions=True), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
         
     await db_manager.close()
+    
+    # Возвращаем управление в главный цикл для запуска новой сети
     return next_network
 
 async def main_loop():

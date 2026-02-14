@@ -238,8 +238,10 @@ class BotService:
                                 pool_type, v3_fee, v2_router, v3_quoter
                             )
                             self._active_pnl_trackers.add(pnl_key)
+
             except asyncio.CancelledError: break
-            except Exception as e: await log.error(f"Ошибка в PnL Manager: {e}")
+            except Exception as e: 
+                await log.error(f"Ошибка в PnL Manager: {e}")
             await asyncio.sleep(5) 
 
     async def _post_buy_actions(self, wallet_address: str, token_address: str, amount_received_wei: Optional[int]):
@@ -262,6 +264,7 @@ class BotService:
                         await asyncio.sleep(0.3)
 
                 wallet_data = self.cache.get_wallet_by_address(wallet_address)
+                
                 if not wallet_data: return
                 
                 manager = AccountManager(
@@ -295,6 +298,43 @@ class BotService:
             except Exception as e:
                 await log.error(f"[{wallet_address[:6]}] Post-buy error: {e}", exc_info=True)
 
+    async def trigger_pnl_tracker(self, wallet_address: str, token_address: str):
+        """Мгновенно запускает трекер PnL в Rust для конкретной позиции."""
+        if not RUST_AVAILABLE: return
+        try:
+            config = self.cache.get_config()
+            rpc_url = config.get('rpc_url', self.config.RPC_URL)
+            quote_symbol = config.get('default_quote_currency', self.config.DEFAULT_QUOTE_CURRENCY)
+            quote_address = self.config.QUOTE_TOKENS.get(quote_symbol, "").lower()
+            
+            # 1. Получаем данные о позиции из БД
+            pos = await self.cache.db.get_position(wallet_address, token_address)
+            if pos['total_cost'] <= 0: return
+
+            # 2. Получаем актуальный баланс (из кэша или напрямую)
+            balance_wei = self.cache.get_exact_balance_wei(wallet_address, token_address) or 0
+            if balance_wei <= 0: return
+
+            # 3. Находим лучший пул для этого токена
+            pool_info = self.cache.get_best_pool(token_address, quote_address)
+            if pool_info and "error" not in pool_info:
+                pool_type = pool_info['type']
+                v3_fee = pool_info.get('fee', 0)
+                
+                # Запускаем в Rust
+                await asyncio.to_thread(
+                    dexbot_core.start_pnl_tracker,  # type: ignore
+                    rpc_url, wallet_address, token_address, quote_address,
+                    str(balance_wei), str(pos['total_cost']),
+                    pool_type, v3_fee, 
+                    self.config.V2_ROUTER_ADDRESS, self.config.V3_QUOTER_ADDRESS
+                )
+                
+                pnl_key = f"{wallet_address.lower()}:{token_address.lower()}"
+                self._active_pnl_trackers.add(pnl_key)
+                await log.success(f"[{wallet_address[:6]}] PnL Tracker запущен мгновенно для {token_address[:6]}")
+        except Exception as e:
+            await log.error(f"Ошибка при быстром запуске PnL трекера: {e}")
 
     async def _tx_watcher_worker(self):
         await log.info("TxWatcher started.")
@@ -308,78 +348,70 @@ class BotService:
                 w3 = await self._get_rpc_w3()
                 receipt = await w3.eth.wait_for_transaction_receipt(tx_hash_bytes, timeout=300)
                 
-                if receipt.status == 1 and trade_action == 'buy' and token_address: # type: ignore
-                    try:
-                        my_addr_lower = wallet_address.lower()
-                        total_received = 0
-                        for log_entry in receipt['logs']:
-                            if log_entry['address'].lower() != token_address.lower(): continue
-                            if len(log_entry['topics']) > 0 and log_entry['topics'][0].hex() == TRANSFER_EVENT_TOPIC.replace("0x", ""):
-                                if len(log_entry['topics']) >= 3:
-                                    to_topic = "0x" + log_entry['topics'][2].hex()[-40:]
-                                    if to_topic.lower() == my_addr_lower:
-                                        amount = int(log_entry['data'].hex(), 16)
-                                        total_received += amount
-                        
-                        if total_received > 0:
-                            self.cache.set_exact_balance_wei(wallet_address, token_address, total_received)
-                            await log.success(f"[{wallet_address[:6]}] 🚀 INSTANT BALANCE (Logs): {total_received}")
-                    except Exception as e:
-                        await log.error(f"Error parsing instant balance: {e}")
+                if receipt.status == 1: # type: ignore
+                    if trade_action == 'buy' and token_address:
+                        try:
+                            my_addr_lower = wallet_address.lower()
+                            received_in_this_tx = 0
+                            for log_entry in receipt['logs']:
+                                if log_entry['address'].lower() != token_address.lower(): continue
+                                # Проверка топика Transfer
+                                if len(log_entry['topics']) > 0 and log_entry['topics'][0].hex() == TRANSFER_EVENT_TOPIC.replace("0x", ""):
+                                    if len(log_entry['topics']) >= 3:
+                                        to_topic = "0x" + log_entry['topics'][2].hex()[-40:]
+                                        if to_topic.lower() == my_addr_lower:
+                                            received_in_this_tx += int(log_entry['data'].hex(), 16)
+                            
+                            if received_in_this_tx > 0:
+                                current_cached_bal = self.cache.get_exact_balance_wei(wallet_address, token_address) or 0
+                                new_total_bal = current_cached_bal + received_in_this_tx
+                                self.cache.set_exact_balance_wei(wallet_address, token_address, new_total_bal)
+                                
+                                await log.success(f"[{wallet_address[:6]}] +{received_in_this_tx} tokens. Total: {new_total_bal}")
 
-                if trade_action == 'buy' and tx_hash_bytes in self.active_buy_txs:
-                    self.active_buy_txs.discard(tx_hash_bytes)
+                                # Обновляем позицию в БД
+                                spent_amount_float = self.cache.get_active_trade_amount_for_quote()
+                                if spent_amount_float:
+                                    config = self.cache.get_config()
+                                    quote_sym = config.get('default_quote_currency', self.config.DEFAULT_QUOTE_CURRENCY)
+                                    quote_addr = self.config.QUOTE_TOKENS.get(quote_sym)
+                                    q_decimals = self.cache.get_token_decimals(quote_addr) or 18
+                                    
+                                    cost_wei = int(spent_amount_float * (10**q_decimals))
+                                    # В БД update_position уже умеет суммировать
+                                    await self.cache.db.update_position(wallet_address, token_address, cost_wei, received_in_this_tx)
+                                    
+                                    # Мгновенно перезапускаем трекер с новыми суммарными данными
+                                    asyncio.create_task(self.trigger_pnl_tracker(wallet_address, token_address))
+                        except Exception as e:
+                            await log.error(f"Error updating position after buy: {e}")
 
-                action_str = "Покупка" if 'buy' in (trade_action or '') else "Продажа"
-                if trade_action == 'approve_sell_post_buy' or trade_action == 'approve_on_demand': action_str = "Approve"
-                if trade_action == 'approve_quote_token': action_str = "Approve USDT/BNB"
+                        # Апрувы и прочее
+                        post_buy_task = asyncio.create_task(self._post_buy_actions(wallet_address, token_address, None))
+                        self.post_buy_tasks.add(post_buy_task)
+                        post_buy_task.add_done_callback(self.post_buy_tasks.discard)
 
-                if receipt.status == 1:  # type: ignore
-                    await log.success(f"TxWatcher: Транзакция {tx_hash_bytes.hex()} УСПЕШНА.")
-                    if self.notification_queue and trade_action and ('buy' in trade_action or 'sell' in trade_action):
-                        await self.notification_queue.put({"status": "success", "wallet": wallet_address, "action": action_str})
-
-                    if token_address and (trade_action == 'buy' or trade_action == 'sell'):
-                        asyncio.create_task(self.cache.db.add_or_update_recent_token(token_address))
-                        asyncio.create_task(self.fetch_and_store_token_metadata(token_address))
-
-                    if trade_action == 'sell' and token_address:
+                    elif trade_action == 'sell' and token_address:
+                        # Очистка при продаже
                         await self.cache.db.delete_cached_balance(wallet_address, token_address)
                         self.cache.set_exact_balance_wei(wallet_address, token_address, 0)
                         self.cache.set_wallet_balance(wallet_address, token_address, 0.0)
-                        await log.info(f"[{wallet_address}] Кэш баланса очищен после продажи.")
-                        
                         await self.cache.db.close_position(wallet_address, token_address)
                         if RUST_AVAILABLE:
                             await asyncio.to_thread(dexbot_core.stop_pnl_tracker, wallet_address, token_address) # type: ignore
-                        pnl_key = f"{wallet_address.lower()}:{token_address.lower()}"
-                        self._active_pnl_trackers.discard(pnl_key)
+                        self._active_pnl_trackers.discard(f"{wallet_address.lower()}:{token_address.lower()}")
 
-                    if trade_action == 'buy' and token_address:
-                        try:
-                            spent_amount_float = self.cache.get_active_trade_amount_for_quote()
-                            if spent_amount_float:
-                                cost_wei = int(spent_amount_float * 10**18) 
-                                await self.cache.db.update_position(wallet_address, token_address, cost_wei, 0)
-                        except Exception as e:
-                            await log.error(f"Ошибка обновления PnL позиции: {e}")
-
-                        post_buy_task = asyncio.create_task(
-                            self._post_buy_actions(wallet_address, token_address, None)
-                        )
-                        self.post_buy_tasks.add(post_buy_task)
-                        post_buy_task.add_done_callback(self.post_buy_tasks.discard)
-                else:
-                    await log.error(f"TxWatcher: Транзакция {tx_hash_bytes.hex()} ПРОВАЛЕНА (reverted).")
-                    if self.notification_queue and trade_action and ('buy' in trade_action or 'sell' in trade_action or 'approve' in trade_action):
-                        await self.notification_queue.put({"status": "error", "message": f"{action_str} провалена (reverted)", "wallet": wallet_address, "action": action_str})
+                    if self.notification_queue:
+                        act = "Покупка" if 'buy' in trade_action else "Продажа" # type: ignore
+                        await self.notification_queue.put({"status": "success", "wallet": wallet_address, "action": act})
                 
-                self.tx_watcher_queue.task_done()
+                else:
+                    if self.notification_queue:
+                        await self.notification_queue.put({"status": "error", "message": "Transaction Reverted", "wallet": wallet_address})
 
-            except asyncio.CancelledError: break
-            except (asyncio.TimeoutError, Exception) as e:
-                hex_hash = tx_data.get('tx_hash', b'').hex() if tx_data else '?'
-                await log.critical(f"Критическая ошибка в TxWatcher для {hex_hash}: {e}", exc_info=False)
+                self.tx_watcher_queue.task_done()
+            except Exception as e:
+                await log.error(f"TxWatcher critical error: {e}")
                 if tx_data: self.tx_watcher_queue.task_done()
 
     async def _worker(self, worker_id: int):
@@ -523,7 +555,10 @@ class BotService:
     def stop(self):
         if not self._is_running: return
         self._is_running = False
-        for worker in self.workers: worker.cancel()
+        for worker in self.workers:
+            worker.cancel()
+        self._active_pnl_trackers.clear()
+        self._refuel_cooldowns.clear()
         
     async def prefetch_token_decimals(self, token_address: str):
         w3 = await self._get_rpc_w3()

@@ -31,7 +31,7 @@ async def test_db_encryption_flow():
         
         # 5. Проверяем расшифровку через get_wallet_with_pk
         wallet_decrypted = await db.get_wallet_with_pk(addr)
-        assert wallet_decrypted['private_key'] == pk
+        assert wallet_decrypted['private_key'] == pk # type: ignore
         
     finally:
         await db.close()

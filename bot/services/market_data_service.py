@@ -458,9 +458,15 @@ class MarketDataService:
 
     async def stop(self):
         if not self._is_running: return
-        await log.info("MarketDataService: остановка...")
+        await log.info("MarketDataService: полная остановка...")
         self._is_running = False
+        
         for worker in self.workers: 
             worker.cancel()
-        if self.exchange: 
-            await self.exchange.close()
+            
+        if self.exchange:
+            try:
+                await self.exchange.close()
+            except: pass
+        
+        self._current_monitored_token = None
