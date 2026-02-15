@@ -22,7 +22,7 @@ try:
     os.environ['SSL_CERT_FILE'] = certifi.where()
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 except ImportError:
-    pass
+    print("Ошибка импорта certifi")
 
 def set_high_priority():
     try:
@@ -34,11 +34,11 @@ def set_high_priority():
             try:
                 p.nice(-10)
             except psutil.AccessDenied:
-                pass
+                print("Ошибка в повышении приоритета приложения")
     except ImportError:
-        pass
+        print("Ошибка импорта psutil")
     except Exception:
-        pass
+        traceback.print_exc()
 
 def ensure_terminal_linux():
     if sys.platform == "win32" or sys.platform == "darwin": return

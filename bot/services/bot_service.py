@@ -332,9 +332,9 @@ class BotService:
                 
                 pnl_key = f"{wallet_address.lower()}:{token_address.lower()}"
                 self._active_pnl_trackers.add(pnl_key)
-                await log.success(f"[{wallet_address[:6]}] PnL Tracker запущен мгновенно для {token_address[:6]}")
+                #await log.success(f"[{wallet_address[:6]}] PnL Tracker запущен мгновенно для {token_address[:6]}")
         except Exception as e:
-            await log.error(f"Ошибка при быстром запуске PnL трекера: {e}")
+            await log.error(f"Ошибка при запуске PnL трекера: {e}")
 
     async def _tx_watcher_worker(self):
         await log.info("TxWatcher started.")
@@ -348,6 +348,7 @@ class BotService:
                 w3 = await self._get_rpc_w3()
                 receipt = await w3.eth.wait_for_transaction_receipt(tx_hash_bytes, timeout=300)
                 
+                # Транзакция прошла
                 if receipt.status == 1: # type: ignore
                     if trade_action == 'buy' and token_address:
                         try:
@@ -404,7 +405,8 @@ class BotService:
                     if self.notification_queue:
                         act = "Покупка" if 'buy' in trade_action else "Продажа" # type: ignore
                         await self.notification_queue.put({"status": "success", "wallet": wallet_address, "action": act})
-                
+
+                # Ошибка транзакции
                 else:
                     if self.notification_queue:
                         await self.notification_queue.put({"status": "error", "message": "Transaction Reverted", "wallet": wallet_address})

@@ -52,14 +52,14 @@ async def secure_db_unlock(db_manager: DatabaseManager, network_name: str) -> st
             pwd1 = Prompt.ask("Новый пароль", password=True)
             pwd2 = Prompt.ask("Повторите пароль", password=True)
             if pwd1 == pwd2 and len(pwd1) > 0:
-                await db_manager.set_password(pwd1)
+                await db_manager.set_password(pwd1) # type: ignore
                 return pwd1
             else:
                 console.print("[bold red]Пароли не совпадают. Попробуйте снова.[/bold red]")
     else:
         attempts = 3
         while attempts > 0:
-            pwd = Prompt.ask(f"Введите пароль для {network_name.upper()}", password=True)
+            pwd = Prompt.ask(f"Введите ваш пароль", password=True)
             if await db_manager.unlock_db(pwd):
                 return pwd
             attempts -= 1
@@ -280,7 +280,8 @@ def run():
     signal.signal(signal.SIGTERM, signal_handler)
     try:
         loop.run_until_complete(main_loop())
-    except: pass
+    except Exception as e:
+        asyncio.run(log.critical("Критическая ошибка запуска 'main_loop", exc_info=True))
     finally:
         loop.close()
         force_restore_terminal()

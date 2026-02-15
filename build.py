@@ -7,6 +7,8 @@ from setuptools import setup, Extension
 from Cython.Build import cythonize
 import platform
 from typing import Set, Iterable
+import marshal
+import base64
 import Cython.Compiler.Options
 
 # Запрещаем докстринги компилятору Cython
@@ -14,20 +16,22 @@ Cython.Compiler.Options.docstrings = False
 
 # --- CONFIG ---
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-SANDBOX_DIR = os.path.join(PROJECT_DIR, "_build_zone")
 MEDIA_DIR = os.path.join(PROJECT_DIR, "media")
+SANDBOX_DIR = os.path.join(PROJECT_DIR, "_build_zone")
 RUST_MODULE_DIR = os.path.join(PROJECT_DIR, "rust_module")
 MAIN_FILE = "main.py"
-BUILD_NAME = "EVM_TERMINAL"  
+BUILD_NAME = "EVM_TERMINAL"
 
 
 def ignore_db_files(directory: str, files: Iterable[str]) -> Set[str]:
     ignored = set()
     for file in files:
-        if file.endswith(('.db', '.sqlite', '.log')):
+        if file.endswith(('.db', '.sqlite', '.log', '.md', '.gitignore', '.ini')):
             ignored.add(file)
         elif directory.endswith('data') and file == '.keep':
             continue
+        elif directory == PROJECT_DIR and file in ("test.py"):
+            ignored.add(file)
     return ignored
 
 
@@ -41,10 +45,10 @@ def prepare_sandbox():
     
     def custom_ignore_func(directory, files):
         base_ignore = shutil.ignore_patterns(
-            "env", "venv", ".venv", ".gif", "contract", ".git", ".idea", "__pycache__",
-            "build", "dist", "logs", "_build_zone", "contract", "*.pyc", "*.c",
-            "build_linux.sh", "local_build.sh", "rust_module", 
-            "rust_module.egg-info", "*.db", "*.sqlite", "*.log", "README.md"
+            "env", "venv", ".venv", ".git", ".idea", "__pycache__", ".txt", "tests",
+            "build", "dist", "logs", "_build_zone", "contract", "*.pyc", "*.c", "*.md",
+            "build_linux.sh", "local_build.sh", "rust_module", "tests", ".gitignore",
+            "rust_module.egg-info", "test.py", "*.db", "*.sqlite", "*.log",
         )
         ignored = base_ignore(directory, files)
         if directory.endswith('data'):
@@ -98,6 +102,8 @@ def get_extensions_in_sandbox():
 
 
 def compile_cython():
+    # NOTE: Легаси функция для защиты от реверс-инжиниринга (как один из дополнительных слоев). 
+    # Оставлена, так как немного экономит место на жестком диске
     print("--- Compiling Cython modules (.so files) ---")
     os.chdir(SANDBOX_DIR)
     try:
@@ -117,13 +123,12 @@ def run_pyinstaller():
     sep = ';' if os.name == 'nt' else ':'
 
     cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--noconfirm", "--onedir", "--console",
+        sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--console",
         "--name", BUILD_NAME, "--clean",
         f"--add-data", f"tui/app.css{sep}tui",
         f"--add-data", f"data{sep}data", 
-        f"--add-data", f"networks{sep}networks", 
-        "--hidden-import", "dexbot_core",
+        f"--add-data", f"networks{sep}networks",
+        "--hidden-import", "dexbot_core"
     ]
     
     # ИКОНКА
@@ -149,7 +154,7 @@ def run_pyinstaller():
 
     # ПРИНУДИТЕЛЬНЫЙ СБОР ВСЕХ МОДУЛЕЙ ПРОЕКТА
     print("--- Collecting all project modules ---")
-    project_roots = ("bot", "tui", "utils")
+    project_roots = ("bot", "tui", "utils", "networks")
     for root, _, files in os.walk("."):
         rel_path = os.path.relpath(root, ".")
         if not rel_path.startswith(project_roots): continue
@@ -163,38 +168,43 @@ def run_pyinstaller():
     print(f"Executing PyInstaller...")
     subprocess.check_call(cmd)
 
-    dist_folder = os.path.join(SANDBOX_DIR, "dist", BUILD_NAME)
-    
-    # Права для Linux/Mac
-    if sys.platform != 'win32':
-        main_bin = os.path.join(dist_folder, BUILD_NAME)
-        if os.path.exists(main_bin):
-            os.chmod(main_bin, 0o755) 
-
 
 def move_binary_back():
     print("--- Moving artifact back ---")
     dist_dir = os.path.join(SANDBOX_DIR, "dist")
     source_folder = os.path.join(dist_dir, BUILD_NAME)
+    
     system_name = sys.platform
     machine_arch = (os.environ.get('TARGET_ARCH') or platform.machine()).lower()
+    if machine_arch == "amd64": machine_arch = "x86_64"
     
-    if machine_arch == "amd64": 
-        machine_arch = "x86_64"
-    
-    if system_name == 'win32': 
-        out_name = f"{BUILD_NAME}_Windows_{machine_arch}"
-    elif system_name == 'darwin': 
-        out_name = f"{BUILD_NAME}_MacOS_{machine_arch}"
-    else: 
-        out_name = f"{BUILD_NAME}_Linux_{machine_arch}"
+    if system_name == 'win32': out_name = f"{BUILD_NAME}_Windows_{machine_arch}"
+    elif system_name == 'darwin': out_name = f"{BUILD_NAME}_MacOS_{machine_arch}"
+    else: out_name = f"{BUILD_NAME}_Linux_{machine_arch}"
     
     dst = os.path.join(PROJECT_DIR, out_name)
+    
     if os.path.exists(source_folder):
         if os.path.exists(dst):
             if os.path.isdir(dst): shutil.rmtree(dst)
             else: os.remove(dst)
+        
+        # 1. Перемещаем основную папку сборки
         shutil.move(source_folder, dst)
+        
+        # 2. ПРИНУДИТЕЛЬНО КОПИРУЕМ NETWORKS В КОРЕНЬ БИЛДА
+        # Rust ищет ./networks, поэтому она должна лежать рядом с бинарником
+        networks_src = os.path.join(PROJECT_DIR, "networks")
+        networks_dst = os.path.join(dst, "networks")
+        
+        if os.path.exists(networks_src):
+            if os.path.exists(networks_dst):
+                shutil.rmtree(networks_dst)
+            shutil.copytree(networks_src, networks_dst)
+            print(f"Manually copied 'networks' folder to: {networks_dst}")
+        else:
+            print("[WARN] Original 'networks' folder not found! Bot will silent exit.")
+
         print(f"SUCCESS! Binary saved to: {dst}")
     else:
         raise Exception("Artifact generation failed")
