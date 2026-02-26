@@ -194,7 +194,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                         Ok(v) => v.into(), 
                         Err(_) => {
                             emit_event(EngineEvent::ImpactUpdate { 
-                                token: token_address, amount_in, impact_pct: 0.0, expected_out: "0".into(), is_buy
+                                token: token_address, quote: quote_address.clone(), amount_in, impact_pct: 0.0, expected_out: "0".into(), is_buy
                             });
                             return;
                         }
@@ -202,14 +202,14 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                     
                     if amt_wei.is_zero() { 
                         emit_event(EngineEvent::ImpactUpdate { 
-                            token: token_address, amount_in, impact_pct: 0.0, expected_out: "0".into(), is_buy
+                            token: token_address, quote: quote_address.clone(), amount_in, impact_pct: 0.0, expected_out: "0".into(), is_buy
                         });
                         return; 
                     }
 
                     if p_type.is_empty() {
                         emit_event(EngineEvent::ImpactUpdate { 
-                            token: token_address, amount_in, impact_pct: 0.0, expected_out: "0".into(), is_buy
+                            token: token_address, quote: quote_address.clone(), amount_in, impact_pct: 0.0, expected_out: "0".into(), is_buy
                         });
                         return;
                     }
@@ -249,7 +249,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                     } else { 0.0 };
                     
                     emit_event(EngineEvent::ImpactUpdate { 
-                        token: token_address, amount_in, impact_pct: impact, expected_out: exp_out.to_string(), is_buy
+                        token: token_address, quote: quote_address, amount_in, impact_pct: impact, expected_out: exp_out.to_string(), is_buy
                     });
                 });
             }

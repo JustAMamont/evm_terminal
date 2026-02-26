@@ -24,6 +24,7 @@ pub enum EngineEvent {
         pool_type: String, 
         address: String, 
         token: String, 
+        quote: String,
         liquidity_usd: f64, 
         fee: u32, 
         spot_price: f64,
@@ -34,6 +35,8 @@ pub enum EngineEvent {
     PoolUpdate { 
         pool_address: String, 
         pool_type: String, 
+        token: String, 
+        quote: String,
         reserve0: Option<String>, 
         reserve1: Option<String>, 
         sqrt_price_x96: Option<String>, 
@@ -61,6 +64,7 @@ pub enum EngineEvent {
 
     ImpactUpdate { 
         token: String, 
+        quote: String,
         amount_in: f64, 
         impact_pct: f64, 
         expected_out: String, 

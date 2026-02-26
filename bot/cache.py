@@ -18,7 +18,6 @@ class GlobalCache:
         # ОСНОВНОЙ КЭШ БАЛАНСОВ В WEI - работает мгновенно из памяти
         self._exact_balances_wei: Dict[str, Dict[str, int]] = {}
         
-        # --- НОВЫЙ КЭШ ПОЗИЦИЙ (Cost) В ПАМЯТИ ---
         # Key: "wallet_addr:token_addr" -> {'cost': int, 'amount': int}
         self._positions: Dict[str, Dict[str, int]] = {}
         
@@ -29,12 +28,14 @@ class GlobalCache:
         
         # --- КЭШ ДЛЯ ПУЛОВ ---
         self._best_pools: Dict[str, Dict[str, Any]] = {} 
-        # ---------------------------
 
         # Локи для каждого кошелька
         self._wallet_locks: Dict[str, asyncio.Lock] = {}
 
         self._quote_prices_usd: Dict[str, float] = {"USDT": 1.0, "USDC": 1.0, "USD1": 1.0}
+
+        # Кэш метаданных токенов
+        self._token_metadata_cache: Dict[str, Dict[str, Any]] = {}
         
         # Флаг для отложенного дампа в БД
         self._pending_db_dump: bool = False
@@ -67,6 +68,8 @@ class GlobalCache:
                         self._exact_balances_wei[w_addr][t_addr] = wei
                         
                         self._token_decimals[t_addr] = decimals
+                        # Также кэшируем в metadata
+                        self._token_metadata_cache[t_addr] = {'decimals': decimals}
                         
                         if w_addr not in self._balances:
                             self._balances[w_addr] = {}
@@ -96,12 +99,12 @@ class GlobalCache:
                 }
                 pos_count += 1
                 
-                await log.debug(f"[RESTORE POS] key={key[:30]}... | cost={cost_val} | amount={amount_val}")
+                #await log.debug(f"[RESTORE POS] key={key[:30]}... | cost={cost_val} | amount={amount_val}")
             
-            # DEBUG: Итоговое состояние позиций в памяти
-            if self._positions:
-                for k, v in self._positions.items():
-                    await log.debug(f"[MEMORY POS] {k[:30]}... | cost={v['cost']} | amount={v['amount']}")
+            ## DEBUG: Итоговое состояние позиций в памяти
+            #if self._positions:
+            #    for k, v in self._positions.items():
+            #        await log.debug(f"[MEMORY POS] {k[:30]}... | cost={v['cost']} | amount={v['amount']}")
             
             if restored_count > 0 or pos_count > 0:
                 await log.info(f"Восстановлено {restored_count} балансов и {pos_count} позиций из БД.")
@@ -177,7 +180,7 @@ class GlobalCache:
         try: await self.db.delete_cached_balance(wallet, token)
         except Exception: pass
 
-    async def get_or_load_balance_wei(self, wallet_address: str, token_address: str) -> int:
+    def get_or_load_balance_wei(self, wallet_address: str, token_address: str) -> int:
         wallet_addr_lower = wallet_address.lower()
         token_addr_lower = token_address.lower()
         
@@ -213,7 +216,7 @@ class GlobalCache:
         new_cost = self._positions[key]['cost']
         new_amount = self._positions[key]['amount']
         
-        asyncio.create_task(log.debug(f"[POSITION] {w[:8]}... | cost={new_cost} | amount={new_amount}"))
+        #asyncio.create_task(log.debug(f"[POSITION] {w[:8]}... | cost={new_cost} | amount={new_amount}"))
         
         # Отправляем ПОЛНЫЕ значения в БД (не дельту!)
         asyncio.create_task(self.db.set_position(wallet, token, new_cost, new_amount))
@@ -224,13 +227,13 @@ class GlobalCache:
         key = f"{wallet.lower()}:{token.lower()}"
         
         if key in self._positions:
-            old_pos = self._positions[key]
-            asyncio.create_task(log.debug(
-                f"[POSITION CLOSE] {wallet[:8]}... | REMOVED cost={old_pos['cost']}, amount={old_pos['amount']}"
-            ))
+            #old_pos = self._positions[key]
+            #asyncio.create_task(log.debug(
+            #    f"[POSITION CLOSE] {wallet[:8]}... | REMOVED cost={old_pos['cost']}, amount={old_pos['amount']}"
+            #))
             del self._positions[key]
-        else:
-            asyncio.create_task(log.debug(f"[POSITION CLOSE] {wallet[:8]}... | KEY NOT FOUND in memory!"))
+        #else:
+        #    asyncio.create_task(log.debug(f"[POSITION CLOSE] {wallet[:8]}... | KEY NOT FOUND in memory!"))
         
         asyncio.create_task(self.db.close_position(wallet, token))
 
@@ -357,6 +360,22 @@ class GlobalCache:
                 if address.lower() in self._wallet_locks: 
                     del self._wallet_locks[address.lower()]
         return {"status": "deleted"}
+
+    def get_token_metadata_cached(self, token_address: str) -> Optional[Dict[str, Any]]:
+        """Получить метаданные токена из кэша - мгновенно, без БД"""
+        return self._token_metadata_cache.get(token_address.lower())
+
+    def set_token_metadata_cache(self, token_address: str, symbol: Optional[str] = None, name: Optional[str] = None, decimals: Optional[int] = None):
+        """Сохранить метаданные токена в кэш"""
+        addr = token_address.lower()
+        if addr not in self._token_metadata_cache:
+            self._token_metadata_cache[addr] = {}
+        if symbol:
+            self._token_metadata_cache[addr]['symbol'] = symbol
+        if name:
+            self._token_metadata_cache[addr]['name'] = name
+        if decimals is not None:
+            self._token_metadata_cache[addr]['decimals'] = decimals
 
     def get_config(self) -> Dict[str, Any]:
         return self.config

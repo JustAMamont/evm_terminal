@@ -277,6 +277,8 @@ pub async fn run_batch_trade(
     chain_id: u64,
     amounts_wei: Option<std::collections::HashMap<String, String>>
 ) -> Vec<EngineEvent> {
+    let start_time = std::time::Instant::now();
+    emit_log("DEBUG", format!("[TRADE] START | action={} | amount={} | gas_gwei={}", action, amount, gas));
     let mut events = Vec::new();
     let (p_type, p_fee) = { 
         let s = CORE_STATE.read().unwrap(); 
@@ -350,7 +352,9 @@ pub async fn run_batch_trade(
             continue;
         }
         
+        let t_nonce = std::time::Instant::now();
         let nonce = { *CORE_STATE.read().unwrap().nonce_map.get(&wallet_addr).unwrap_or(&0) };
+        emit_log("DEBUG", format!("[TRADE] NONCE | {}ms | nonce={}", t_nonce.elapsed().as_millis(), nonce));
         let deadline = U256::from(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -360,6 +364,7 @@ pub async fn run_batch_trade(
         
         // ================= АВТОМАТИЧЕСКАЯ ПРОВЕРКА ALLOWANCE ПРИ ПРОДАЖЕ =================
         if action == "sell" {
+            let t_allow = std::time::Instant::now();
             let mut allowance = U256::zero();
             // Получаем провайдера для проверки allowance
             if let Some(url) = &url_opt {
@@ -369,6 +374,7 @@ pub async fn run_batch_trade(
                     if let Ok(a) = erc20.allowance(wallet_addr, router).call().await {
                         allowance = a;
                     }
+                emit_log("DEBUG", format!("[TRADE] ALLOWANCE CHECK | {}ms | allowance={}", t_allow.elapsed().as_millis(), allowance));
                 }
             }
             
@@ -421,12 +427,14 @@ pub async fn run_batch_trade(
         // ===================================================================================
         
         // Извлекаем quoter ПЕРЕД await
+        let t_exp = std::time::Instant::now();
         let exp_out = if p_type == "V3" {
             let quoter = CORE_STATE.read().unwrap().quoter_address;
             calculate_expected_out_v3_quoted(t_in, t_out, amount_wei, p_fee, quoter).await
         } else {
             calculate_expected_out_v2_pure(t_in, t_out, amount_wei)
         };
+        emit_log("DEBUG", format!("[TRADE] EXPECTED_OUT | {}ms | pool_type={} | exp_out={}", t_exp.elapsed().as_millis(), p_type, exp_out));
         
         // Безопасное вычисление min_out
         let slippage_factor = (10000.0 - slippage * 100.0).max(0.0).min(10000.0) as u64;
@@ -464,7 +472,9 @@ pub async fn run_batch_trade(
         
         if let Ok(sig) = wallet.sign_transaction_sync(&typed_tx) {
             let raw_tx = typed_tx.rlp_signed(&sig);
+            let t_broadcast = std::time::Instant::now();
             let hash = parallel_broadcast(raw_tx.clone()).await;
+            emit_log("DEBUG", format!("[TRADE] BROADCAST | {}ms | hash={}", t_broadcast.elapsed().as_millis(), &hash[..16]));
             
             let is_success = hash.starts_with("0x");
             
@@ -502,12 +512,16 @@ pub async fn run_batch_trade(
             });
         }
     }
+    emit_log("DEBUG", format!("[TRADE] TOTAL | {}ms | events={}", start_time.elapsed().as_millis(), events.len()));
     events
 }
 
 /// Параллельная отправка транзакции на несколько RPC
 async fn parallel_broadcast(data: Bytes) -> String {
+    let t_start = std::time::Instant::now();
     let urls = { RPC_POOL.read().unwrap().get_fastest_pool(3) };
+    emit_log("DEBUG", format!("[BROADCAST] START | {} nodes", urls.len()));
+
     let mut tasks = Vec::new();
     
     for url in urls {
@@ -525,10 +539,12 @@ async fn parallel_broadcast(data: Bytes) -> String {
     }
     
     for res in join_all(tasks).await { 
-        if let Ok(Ok(h)) = res { 
-            return h; 
-        } 
+        if let Ok(Ok(h)) = res {
+            emit_log("DEBUG", format!("[BROADCAST] SUCCESS | {}ms", t_start.elapsed().as_millis()));
+            return h;
+        }
     }
+    emit_log("DEBUG", format!("[BROADCAST] FAILED | {}ms", t_start.elapsed().as_millis()));
     "Error: all RPCs failed".into()
 }
 

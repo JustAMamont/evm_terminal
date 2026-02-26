@@ -241,6 +241,7 @@ async fn prefetch_all_data(
                 pool_type: best.pool_type, 
                 address: format!("{:?}", best.address), 
                 token: format!("{:?}", token), 
+                quote: format!("{:?}", quote),
                 liquidity_usd: best.liquidity_usd, 
                 fee: best.fee_bps,
                 spot_price: best.spot_price,
@@ -607,6 +608,8 @@ impl WebSocketManager {
                             emit_event(EngineEvent::PoolUpdate {
                                 pool_address: format!("{:?}", log.address),
                                 pool_type: "V2".into(),
+                                token: format!("{:?}", target_token_addr),
+                                quote: format!("{:?}", quote_token),
                                 reserve0: Some(sync.reserve_0.to_string()),
                                 reserve1: Some(sync.reserve_1.to_string()),
                                 sqrt_price_x96: None,
@@ -638,6 +641,8 @@ impl WebSocketManager {
                             emit_event(EngineEvent::PoolUpdate {
                                 pool_address: format!("{:?}", log.address),
                                 pool_type: "V3".into(),
+                                token: format!("{:?}", target_token_addr),
+                                quote: format!("{:?}", quote_token),
                                 reserve0: None,
                                 reserve1: None,
                                 sqrt_price_x96: Some(swap.sqrt_price_x96.to_string()),

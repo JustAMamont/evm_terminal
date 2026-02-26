@@ -277,4 +277,4 @@ class LoggerProxy:
         else:
             pass
 
-log: LoggerProxy = LoggerProxy(path_template='logs/{date}.log', level=LogLevel.INFO)
+log: LoggerProxy = LoggerProxy(path_template='logs/{date}.log', level=LogLevel.DEBUG)

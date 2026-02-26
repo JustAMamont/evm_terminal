@@ -313,6 +313,7 @@ class TradingApp(App):
         
         self._current_pool_info: Dict[str, Any] = {}
         self._current_token_address: Optional[str] = None
+        self._current_quote_address: Optional[str] = None
         
         self._market_data: Dict[str, Any] = self._get_empty_market_data()
         self._balance_cache: Dict[str, Dict[str, float]] = {}
@@ -441,12 +442,15 @@ class TradingApp(App):
         except Exception:
             pass
 
-    def _is_event_for_current_token(self, event_token: str) -> bool:
-        """Проверяет что событие относится к текущему активному токену"""
+    def _is_event_for_current_pair(self, event_token: str, event_quote: Optional[str] = None) -> bool:
+        """Проверяет что событие относится к текущей паре token/quote"""
         if not self._current_token_address:
             return False
         if event_token and event_token != self._current_token_address.lower():
             return False
+        if event_quote and self._current_quote_address:
+            if event_quote.lower() != self._current_quote_address.lower():
+                return False
         return True
 
     # ===================== СОБЫТИЯ ВЗАИМОДЕЙСТВИЯ (KEYS & CLICKS) =====================
@@ -579,7 +583,8 @@ class TradingApp(App):
 
     async def _evt_pool_detected(self, data: dict):
         event_token = data.get('token', '').lower()
-        if not self._is_event_for_current_token(event_token):
+        event_quote = data.get('quote', '').lower()
+        if not self._is_event_for_current_pair(event_token, event_quote):
             return
 
         self._update_pool_cache(data)
@@ -591,6 +596,13 @@ class TradingApp(App):
         if token_symbol:
             self._market_data['token_symbol'] = token_symbol
             if self._current_token_address:
+                # КЭШИРУЕМ В ПАМЯТЬ - мгновенный доступ
+                self.cache.set_token_metadata_cache(
+                    self._current_token_address,
+                    symbol=token_symbol,
+                    name=data.get('token_name')
+                )
+                # БД запрос в фоне, не блокирует
                 asyncio.create_task(
                     self.cache.db.add_or_update_recent_token(
                         self._current_token_address,
@@ -605,7 +617,8 @@ class TradingApp(App):
         
     async def _evt_pool_error(self, data: dict):
         event_token = data.get('token', '').lower()
-        if not self._is_event_for_current_token(event_token):
+        event_quote = data.get('quote', '').lower()
+        if not self._is_event_for_current_pair(event_token, event_quote):
             return
         
         await log.error(f"<red>[POOL ERROR]</red> {data.get('error')}")
@@ -615,7 +628,8 @@ class TradingApp(App):
 
     async def _evt_pool_update(self, data: dict):
         event_token = data.get('token', '').lower()
-        if not self._is_event_for_current_token(event_token):
+        event_quote = data.get('quote', '').lower()
+        if not self._is_event_for_current_pair(event_token, event_quote):
             return
                 
         self._current_pool_info['pool_type'] = data.get('pool_type', '')
@@ -638,7 +652,8 @@ class TradingApp(App):
 
     async def _evt_pool_not_found(self, data: dict):
         event_token = data.get('token', '').lower()
-        if not self._is_event_for_current_token(event_token):
+        event_quote = data.get('quote', '').lower()
+        if not self._is_event_for_current_pair(event_token, event_quote):
             return
         
         selected = data.get("selected_quote", "")
@@ -664,7 +679,8 @@ class TradingApp(App):
 
     async def _evt_impact_update(self, data: dict):
         event_token = data.get('token', '').lower()
-        if not self._is_event_for_current_token(event_token):
+        event_quote = data.get('quote', '').lower()
+        if not self._is_event_for_current_pair(event_token, event_quote):
             return
         
         is_buy = data.get('is_buy', True)
@@ -686,18 +702,18 @@ class TradingApp(App):
         token = data.get('token', '')
         
         # === DEBUG: Что пришло из Rust ===
-        await log.debug(f"[TX_SENT] INCOMING | tx_hash={tx_hash[:16] if tx_hash else 'None'}... | action='{action}' | wallet={wallet[:10] if wallet else 'None'}... | token={token[:10] if token else 'None'}... | amount={amount}")
+        #await log.debug(f"[TX_SENT] INCOMING | tx_hash={tx_hash[:16] if tx_hash else 'None'}... | action='{action}' | wallet={wallet[:10] if wallet else 'None'}... | token={token[:10] if token else 'None'}... | amount={amount}")
         
         # Записываем в трекер
         self._tx_tracker.record_tx_sent(tx_hash, wallet, action, amount, token)
         
         # === DEBUG: Проверяем что записалось ===
-        tx_hash_lower = tx_hash.lower() if tx_hash else ''
-        if tx_hash_lower in self._tx_tracker._pending_txs:
-            stored = self._tx_tracker._pending_txs[tx_hash_lower]
-            await log.debug(f"[TX_SENT] STORED OK | action='{stored.get('action')}' | wallet='{stored.get('wallet', '')[:10]}...' | token='{stored.get('token', '')[:10]}...'")
-        else:
-            await log.debug(f"[TX_SENT] STORE FAILED! tx_hash_lower={tx_hash_lower[:16]}...")
+        #tx_hash_lower = tx_hash.lower() if tx_hash else ''
+        #if tx_hash_lower in self._tx_tracker._pending_txs:
+            #stored = self._tx_tracker._pending_txs[tx_hash_lower]
+        #    await log.debug(f"[TX_SENT] STORED OK | action='{stored.get('action')}' | wallet='{stored.get('wallet', '')[:10]}...' | token='{stored.get('token', '')[:10]}...'")
+        #else:
+        #    await log.debug(f"[TX_SENT] STORE FAILED! tx_hash_lower={tx_hash_lower[:16]}...")
         
         short_wallet = self._short_wallet(wallet) if wallet else "???"
         await log.info(f"<cyan>[TX SENT]</cyan> {action.upper()} {short_wallet} Hash: {tx_hash[:16]}...")
@@ -713,16 +729,16 @@ class TradingApp(App):
         status = status_raw.lower() if isinstance(status_raw, str) else str(status_raw)
         
         # === DEBUG: Что пришло ===
-        await log.debug(f"[TX_CONFIRMED] INCOMING | tx_hash={tx_hash[:16] if tx_hash else 'None'}... | status_raw='{status_raw}' | status_normalized='{status}' | gas_used={gas_used}")
+        #await log.debug(f"[TX_CONFIRMED] INCOMING | tx_hash={tx_hash[:16] if tx_hash else 'None'}... | status_raw='{status_raw}' | status_normalized='{status}' | gas_used={gas_used}")
         
         # Ищем в трекере
         tx_result = self._tx_tracker.confirm_tx(tx_hash, gas_used, 1 if status == 'success' else 0)
         
         # === DEBUG: Результат поиска в трекере ===
-        if tx_result:
-            await log.debug(f"[TX_CONFIRMED] FOUND IN TRACKER | keys={list(tx_result.keys())}")
-        else:
-            await log.debug(f"[TX_CONFIRMED] NOT IN TRACKER! tx_hash={tx_hash[:16] if tx_hash else 'None'}... | Checking all pending: {list(self._tx_tracker._pending_txs.keys())[:3]}...")
+        #if tx_result:
+        #    await log.debug(f"[TX_CONFIRMED] FOUND IN TRACKER | keys={list(tx_result.keys())}")
+        #else:
+        #    await log.debug(f"[TX_CONFIRMED] NOT IN TRACKER! tx_hash={tx_hash[:16] if tx_hash else 'None'}... | Checking all pending: {list(self._tx_tracker._pending_txs.keys())[:3]}...")
         
         if tx_result:
             latency_ms = tx_result.get('latency_ms', 0)
@@ -732,39 +748,39 @@ class TradingApp(App):
             amount = tx_result.get('amount', 0)
             
             # === DEBUG: Извлечённые значения ===
-            await log.debug(f"[TX_CONFIRMED] EXTRACTED | action='{action}' | wallet='{wallet[:10] if wallet else 'EMPTY'}' | token='{token[:10] if token else 'EMPTY'}' | amount={amount}")
+            #await log.debug(f"[TX_CONFIRMED] EXTRACTED | action='{action}' | wallet='{wallet[:10] if wallet else 'EMPTY'}' | token='{token[:10] if token else 'EMPTY'}' | amount={amount}")
             
             action_ru = "Покупка" if action == "buy" else "Продажа" if action == "sell" else f"???({action})"
             action_emoji = "🟢" if action == "buy" else "🔴" if action == "sell" else "❓"
-            short_wallet = self._short_wallet(wallet) if wallet else "???"
+            #short_wallet = self._short_wallet(wallet) if wallet else "???"
             
             if status == "success":
                 await log.success(f"<green>[TX CONFIRMED]</green> {action_ru} | Latency: {latency_ms:.0f}ms")
                 self.notify(f"{action_emoji} {action_ru} успешна!\nLatency: {latency_ms:.0f}ms", severity="information", title=f"{action_ru}")
                 
                 # === DEBUG: Проверка условия закрытия позиции ===
-                cond_action = action == "sell"
-                cond_wallet = bool(wallet)
-                cond_token = bool(token)
-                await log.debug(f"[TX_CONFIRMED] CLOSE CONDITION | action=='sell': {cond_action} | wallet: {cond_wallet} | token: {cond_token} | ALL: {cond_action and cond_wallet and cond_token}")
+                #cond_action = action == "sell"
+                #cond_wallet = bool(wallet)
+                #cond_token = bool(token)
+                #await log.debug(f"[TX_CONFIRMED] CLOSE CONDITION | action=='sell': {cond_action} | wallet: {cond_wallet} | token: {cond_token} | ALL: {cond_action and cond_wallet and cond_token}")
                 
                 if action == "sell" and wallet and token:
                     # Позиция ДО закрытия
-                    pos_before = self.cache.get_position_memory(wallet, token)
-                    await log.debug(f"[BEFORE CLOSE] wallet={short_wallet} | token={token[:10]}... | cost={pos_before.get('cost', 0)} | amount={pos_before.get('amount', 0)}")
+                    #pos_before = self.cache.get_position_memory(wallet, token)
+                    #await log.debug(f"[BEFORE CLOSE] wallet={short_wallet} | token={token[:10]}... | cost={pos_before.get('cost', 0)} | amount={pos_before.get('amount', 0)}")
                     
                     # Закрываем
                     self.cache.close_position_memory(wallet, token)
                     
                     # Позиция ПОСЛЕ закрытия
-                    pos_after = self.cache.get_position_memory(wallet, token)
-                    await log.debug(f"[AFTER CLOSE] wallet={short_wallet} | token={token[:10]}... | cost={pos_after.get('cost', 0)} | amount={pos_after.get('amount', 0)}")
+                    #pos_after = self.cache.get_position_memory(wallet, token)
+                    #await log.debug(f"[AFTER CLOSE] wallet={short_wallet} | token={token[:10]}... | cost={pos_after.get('cost', 0)} | amount={pos_after.get('amount', 0)}")
                     
                     # Сбрасываем impact
                     self._market_data['impact_sell'] = 0.0
                     self.ui_update_queue.put_nowait("refresh_market_data")
-                else:
-                    await log.debug(f"[TX_CONFIRMED] NOT CLOSING POSITION | reason: action='{action}' (need 'sell'), wallet={'SET' if wallet else 'EMPTY'}, token={'SET' if token else 'EMPTY'}")
+                #else:
+                #    await log.debug(f"[TX_CONFIRMED] NOT CLOSING POSITION | reason: action='{action}' (need 'sell'), wallet={'SET' if wallet else 'EMPTY'}, token={'SET' if token else 'EMPTY'}")
             else:
                 await log.error(f"<red>[TX FAILED]</red> {action_ru} | Latency: {latency_ms:.0f}ms")
                 self.notify(f"❌ {action_ru} ошибка!\nLatency: {latency_ms:.0f}ms", severity="error", title=f"{action_ru}")
@@ -799,7 +815,7 @@ class TradingApp(App):
         
         # Берём ПОЛНЫЙ token_address, а не обрезанный token
         token_address = data.get('token_address', '')
-        token_display = token_address[:10] if token_address else '???'
+        #token_display = token_address[:10] if token_address else '???'
         
         amount = data.get('amount', 0)
         #gas_price = data.get('gas_price_gwei', 0)
@@ -814,10 +830,10 @@ class TradingApp(App):
         short_wallet = self._short_wallet(wallet) if wallet else "???"
         explorer_url = f"{self.app_config.EXPLORER_URL}tx/{tx_hash}" if tx_hash else ""
         
-        await log.debug(f"[TRADE_STATUS] status={status} | action={action} | wallet={short_wallet} | token={token_display}...")
+        #await log.debug(f"[TRADE_STATUS] status={status} | action={action} | wallet={short_wallet} | token={token_display}...")
         
         if status == "sent":
-            await log.debug(f"[TRADE SENT] action={action} | amount={amount} | tokens_received={tokens_received} | tokens_sold={tokens_sold}")
+            #await log.debug(f"[TRADE SENT] action={action} | amount={amount} | tokens_received={tokens_received} | tokens_sold={tokens_sold}")
             
             if token_address and wallet:
                 await self._update_position_memory_on_send(
@@ -834,13 +850,13 @@ class TradingApp(App):
             self.notify(f"{action_emoji} {action_ru} успешна!\nLatency: {latency_ms:.0f}ms", severity="information", title=f"{action_ru}", timeout=4)
             
             if action == "sell" and token_address and wallet:
-                pos_before = self.cache.get_position_memory(wallet, token_address)
-                await log.debug(f"[BEFORE CLOSE] {short_wallet} | cost={pos_before['cost']}, amount={pos_before['amount']}")
+                #pos_before = self.cache.get_position_memory(wallet, token_address)
+                #await log.debug(f"[BEFORE CLOSE] {short_wallet} | cost={pos_before['cost']}, amount={pos_before['amount']}")
                 
                 self.cache.close_position_memory(wallet, token_address)
                 
-                pos_after = self.cache.get_position_memory(wallet, token_address)
-                await log.debug(f"[AFTER CLOSE] {short_wallet} | cost={pos_after['cost']}, amount={pos_after['amount']}")
+                #pos_after = self.cache.get_position_memory(wallet, token_address)
+                #await log.debug(f"[AFTER CLOSE] {short_wallet} | cost={pos_after['cost']}, amount={pos_after['amount']}")
                 
                 self._market_data['impact_sell'] = 0.0
                 self.ui_update_queue.put_nowait("refresh_market_data")
@@ -858,7 +874,7 @@ class TradingApp(App):
                     sold_wei = int(tokens_sold)
                     if sold_wei > 0:
                         self.cache.add_token_balance(wallet, token_address, sold_wei, decimals=token_decimals, save_to_db=True)
-                        await log.debug(f"[ROLLBACK] +{sold_wei} tokens -> {short_wallet}")
+                        #await log.debug(f"[ROLLBACK] +{sold_wei} tokens -> {short_wallet}")
                 except (ValueError, TypeError):
                     pass
 
@@ -873,7 +889,7 @@ class TradingApp(App):
                 quote_decimals = self.cache.get_token_decimals(quote_address) or 18
                 cost_wei = int(float(amount) * (10**quote_decimals))
                 
-                await log.debug(f"[BUY] cost_wei={cost_wei} | quote_decimals={quote_decimals} | amount={amount}")
+                #await log.debug(f"[BUY] cost_wei={cost_wei} | quote_decimals={quote_decimals} | amount={amount}")
                 
                 self.cache.update_position_memory(wallet, token_address, cost_wei, 0)
                 
@@ -953,7 +969,7 @@ class TradingApp(App):
                 except asyncio.TimeoutError:
                     continue 
                     
-                await self.handle_rust_event(event)
+                asyncio.create_task(self.handle_rust_event(event))
             except asyncio.CancelledError: 
                 break
             except Exception: 
@@ -981,10 +997,12 @@ class TradingApp(App):
                         
                         token_symbol = "TOKEN"
                         try:
-                            meta = await self.cache.db.get_token_metadata(active_token)
+                            # ИЗ КЭША - мгновенно, без БД
+                            meta = self.cache.get_token_metadata_cached(active_token)
                             if meta and meta.get('symbol'): 
                                 token_symbol = meta['symbol']
-                        except Exception: pass
+                        except Exception: 
+                            pass
                         
                         pool_status = self._get_pool_status_display(active_token)
                         metadata_display.update(f"Token Info:[bold cyan]{token_symbol}[/] {pool_status}")
@@ -1049,7 +1067,8 @@ class TradingApp(App):
             
             token_symbol = self._market_data.get('token_symbol', 'TOKEN')
             if token_symbol == 'TOKEN':
-                meta = await self.cache.db.get_token_metadata(self._current_token_address)
+                # ИЗ КЭША - мгновенно, без БД
+                meta = self.cache.get_token_metadata_cached(self._current_token_address)
                 if meta and meta.get('symbol'):
                     token_symbol = meta['symbol']
                     self._market_data['token_symbol'] = token_symbol
@@ -1129,6 +1148,9 @@ class TradingApp(App):
         
         quote_symbol = str(self.query_one("#trade_quote_select").value)
         quote_address = self.app_config.QUOTE_TOKENS.get(quote_symbol, "")
+        
+        # Сохраняем quote для фильтрации
+        self._current_quote_address = quote_address.lower() if quote_address else None
 
         if self.bridge: 
             self.bridge.send(EngineCommand.switch_token(token_address, quote_address, quote_symbol))
@@ -1196,6 +1218,11 @@ class TradingApp(App):
     @on(Select.Changed, "#trade_quote_select")
     async def on_quote_change(self, event: Select.Changed):
         quote_symbol = str(event.value)
+        quote_address = self.app_config.QUOTE_TOKENS.get(quote_symbol, "")
+        
+        # СНАЧАЛА обновляем quote - фильтр начнёт работать сразу
+        self._current_quote_address = quote_address.lower() if quote_address else None
+        
         await self.cache.update_config({"default_quote_currency": quote_symbol})
         self.notify(f"Валюта изменена на {quote_symbol}", timeout=1)
 
@@ -1220,6 +1247,8 @@ class TradingApp(App):
         if not quote_address:
             await log.warning(f"[TUI] Quote address not found for symbol: {quote_symbol}")
             return
+        
+        self._current_quote_address = quote_address.lower()
         
         await self.cache.update_config({"default_quote_currency": quote_symbol})
         self.notify(f"Quote валюта: {quote_symbol}", timeout=1)
@@ -1323,15 +1352,16 @@ class TradingApp(App):
         decimals = self.cache.get_token_decimals(token_address) or 18
 
         for w_addr in wallets_to_trade:
-            wei = await self.cache.get_or_load_balance_wei(w_addr, token_address)
+            wei = self.cache.get_or_load_balance_wei(w_addr, token_address)
             if wei:
                 total_tokens_wei += wei
                 amounts_wei_dict[w_addr.lower()] = str(wei)
         
         if total_tokens_wei > 0:
             final_amount = total_tokens_wei / (10**decimals)
-            meta = await self.cache.db.get_token_metadata(token_address)
-            display_symbol = meta['symbol'] if meta and meta.get('symbol') else "TOKEN"
+            # ИЗ КЭША - мгновенно, без await и БД
+            meta = self.cache.get_token_metadata_cached(token_address)
+            display_symbol = meta.get('symbol', 'TOKEN') if meta else "TOKEN"
             return final_amount, display_symbol
         return 0.0, "TOKEN"
 
@@ -1363,7 +1393,7 @@ class TradingApp(App):
             btn = self.query_one(btn_id, Button)
             if not btn.disabled:
                 btn.add_class("button-pressed")
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.03)
                 btn.remove_class("button-pressed")
         except Exception: pass
         

@@ -68,8 +68,10 @@ async def load_last_network(db_manager: DatabaseManager, available_networks: lis
     try:
         config = await db_manager.get_config()
         last = config.get('last_network')
-        if last in available_networks: return last
-    except: pass
+        if last in available_networks: 
+            return last
+    except: 
+        pass
     return available_networks[0]
 
 async def run_bot_instance(network_name: str, available_networks: list) -> Optional[str]:
