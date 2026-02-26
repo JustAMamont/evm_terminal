@@ -1415,7 +1415,20 @@ class TradingApp(App):
         else:
             final_amount, display_symbol = await self._prepare_buy_data(wallets_to_trade, quote_symbol, quote_address)
             if final_amount <= 0:
-                return self.notify("Сумма 0 или ошибка расчета.", severity="error")
+                return self.notify("Сумма 0 или ошибка расчета.", severity="error", timeout=5)
+            
+            # === ПРОВЕРКА БАЛАНСА QUOTE ТОКЕНА ===
+            quote_address_lower = quote_address.lower()
+            total_quote_balance = 0.0
+            for w_addr in wallets_to_trade:
+                total_quote_balance += self._balance_cache.get(w_addr.lower(), {}).get(quote_address_lower, 0.0)
+            
+            if final_amount > total_quote_balance:
+                return self.notify(
+                    f"Недостаточно {quote_symbol}: нужно {final_amount:.6f}, есть {total_quote_balance:.6f}",
+                    severity="error",
+                    timeout=5
+                )
 
         await log.info(f"TUI: START TRADE -> {self._active_trade_mode} {final_amount:.6f} {display_symbol}")
 
