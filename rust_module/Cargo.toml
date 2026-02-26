@@ -1,6 +1,6 @@
 [package]
 name = "dexbot_core"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 
 [lib]
@@ -8,7 +8,7 @@ name = "dexbot_core"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.20.0", features = ["extension-module"] }
+pyo3 = { version = "0.20.0", features = ["extension-module", "abi3-py312"] }
 pyo3-asyncio = { version = "0.20.0", features = ["tokio-runtime"] }
 tokio = { version = "1.32.0", features = ["full"] }
 ethers = { version = "2.0.10", features = ["ws", "rustls", "abigen"] }
@@ -21,6 +21,7 @@ pkcs8 = "0.10"
 url = "2.4"
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 base64 = "0.21"
+chrono = "0.4"
 
 # --- JSON Parsing ---
 serde = { version = "1.0", features = ["derive"] }
@@ -32,6 +33,9 @@ pbkdf2 = "0.12"
 sha2 = "0.10"
 rand = "0.8"
 typenum = "1.17.0"
+
+# --- Bridge ---
+crossbeam-channel = "0.5"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 libc = "0.2"
