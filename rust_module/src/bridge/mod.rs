@@ -94,7 +94,7 @@ pub fn emit_event(event: EngineEvent) {
 
 // ----- ПРОБРОС ЛОГОВ В ПАЙТОН -----
 
-pub const DEBUG_MODE: bool = true;
+pub const DEBUG_MODE: bool = false;
 
 pub fn emit_log(level: &str, message: String) {
     if !DEBUG_MODE && level == "DEBUG" { return; }
