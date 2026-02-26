@@ -131,4 +131,4 @@ if __name__ == "__main__":
         print(f"Критическая ошибка инициализации: {e}")
         import traceback
         traceback.print_exc()
-        input("Нажмите Enter для выхода...")
+        input("Нажмите Enter для выхода... ")
