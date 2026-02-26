@@ -7,33 +7,33 @@
 ## Архитектура
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      TradingApp (App)                       │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────────┐  ┌─────────────────────────────────┐   │
-│  │  Event Loop     │  │  Rust Event Listener            │   │
-│  │  - status_update│  │  - _rust_event_listener()       │   │
-│  │  - ui_updater   │  │  - handle_rust_event()          │   │
-│  │  - notifications│  │  - _rust_event_handlers dispatch│   │
-│  └─────────────────┘  └─────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────────┐  ┌─────────────────────────────────┐   │
-│  │  TxStatusTracker│  │  State                          │   │
-│  │  - pending_txs  │  │  - _current_token_address       │   │
-│  │  - positions    │  │  - _current_pool_info           │   │
-│  │  - latency      │  │  - _market_data                 │   │
-│  └─────────────────┘  │  - wallets_cache_ui             │   │
-│                       └─────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────┤
-│                     UI Components                           │
-│  ┌───────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
-│  │StatusRPC  │ │StatusGas │ │StatusWS  │ │StatusWallets │   │
-│  └───────────┘ └──────────┘ └──────────┘ └──────────────┘   │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │                    TabbedContent                      │  │
-│  │  [Trade] [Wallets] [Settings] [Logs] [Help]           │  │
-│  └───────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
++-----------------------------------------------------------+
+|                     TradingApp (App)                      |
++-----------------------------------------------------------+
+|  +----------------+  +---------------------------------+  |
+|  | Event Loop     |  | Rust Event Listener             |  |
+|  | - status_update|  | - _rust_event_listener()        |  |
+|  | - ui_updater   |  | - handle_rust_event()           |  |
+|  | - notifications|  | - _rust_event_handlers dispatch |  |
+|  +----------------+  +---------------------------------+  |
++-----------------------------------------------------------+
+|  +----------------+  +---------------------------------+  |
+|  | TxStatusTracker|  | State                           |  |
+|  | - pending_txs  |  | - _current_token_address        |  |
+|  | - positions    |  | - _current_pool_info            |  |
+|  | - latency      |  | - _market_data                  |  |
+|  +----------------+  | - wallets_cache_ui              |  |
+|                      +---------------------------------+  |
++-----------------------------------------------------------+
+|                    UI Components                          |
+|  +----------+ +----------+ +----------+ +--------------+  |
+|  |StatusRPC | |StatusGas | |StatusWS  | |StatusWallets |  |
+|  +----------+ +----------+ +----------+ +--------------+  |
+|  +-----------------------------------------------------+  |
+|  |                   TabbedContent                     |  |
+|  |  [Trade] [Wallets] [Settings] [Logs] [Help]         |  |
+|  +-----------------------------------------------------+  |
++-----------------------------------------------------------+
 ```
 
 ---
@@ -52,11 +52,11 @@
 ### Вкладки
 
 ```
-trade_tab     → Ввод токена, сумма, BUY/SELL панели, market data
-wallets_tab   → Таблица кошельков, форма добавления
-settings_tab  → RPC, quote currency, auto-fuel, slippage, gas
-logs_tab      → RichLog с буфером 500 сообщений
-help_tab      → Markdown справка
+trade_tab     --> Token input, amount, BUY/SELL panels, market data
+wallets_tab   --> Wallets table, add form
+settings_tab  --> RPC, quote currency, auto-fuel, slippage, gas
+logs_tab      --> RichLog with 500 message buffer
+help_tab      --> Markdown help
 ```
 
 ---
@@ -89,10 +89,12 @@ _rust_event_handlers = {
 ### Цепочка обработки
 
 ```
-Rust Event → _rust_event_listener() → handle_rust_event()
-                                              ↓
+Rust Event -> _rust_event_listener() -> handle_rust_event()
+                                              |
+                                              v
                                     _rust_event_handlers[type](data)
-                                              ↓
+                                              |
+                                              v
                                     UI Update / State Change
 ```
 
@@ -182,41 +184,41 @@ _background_tasks = [
 
 ```
 action_execute_trade()
-    │
-    ├─→ _prepare_buy_data() → сумма, quote_symbol
-    │
-    └─→ bridge.send(EngineCommand.execute_trade(...))
-              │
-              ↓ (Rust)
-         TxSent → _evt_tx_sent() → record в _tx_tracker
-              │
-              ↓
-         TradeStatus(sent) → _update_position_memory_on_send()
-              │
-              ↓
-         TxConfirmed → _evt_tx_confirmed() → notify user
+    |
+    +--> _prepare_buy_data() -> amount, quote_symbol
+    |
+    +--> bridge.send(EngineCommand.execute_trade(...))
+              |
+              v (Rust)
+         TxSent -> _evt_tx_sent() -> record in _tx_tracker
+              |
+              v
+         TradeStatus(sent) -> _update_position_memory_on_send()
+              |
+              v
+         TxConfirmed -> _evt_tx_confirmed() -> notify user
 ```
 
 ### SELL Flow
 
 ```
 action_execute_trade()
-    │
-    ├─→ _prepare_sell_data() → сумма из get_or_load_balance_wei()
-    │
-    └─→ bridge.send(EngineCommand.execute_trade(...))
-              │
-              ↓ (Rust)
-         TxSent → _evt_tx_sent()
-              │
-              ↓
-         TradeStatus(sent) → subtract_token_balance()
-              │
-              ↓
-         TxConfirmed(success) → close_position_memory()
-              │
-              ↓ (если failed)
-         Rollback → add_token_balance()
+    |
+    +--> _prepare_sell_data() -> amount from get_or_load_balance_wei()
+    |
+    +--> bridge.send(EngineCommand.execute_trade(...))
+              |
+              v (Rust)
+         TxSent -> _evt_tx_sent()
+              |
+              v
+         TradeStatus(sent) -> subtract_token_balance()
+              |
+              v
+         TxConfirmed(success) -> close_position_memory()
+              |
+              v (if failed)
+         Rollback -> add_token_balance()
 ```
 
 ---

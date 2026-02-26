@@ -28,47 +28,40 @@
 ## Архитектура
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│                        PYTHON LAYER                           │
-│  ┌───────────────┐  ┌─────────────┐ ┌────────────────────┐    │
-│  │  TUI (Textual)│  │ GlobalCache │ │ BridgeManager      │    │
-│  │  - Render UI  │  │ - Balances  │ │ - Commands → Rust  │    │
-│  │  - User Input │  │ - Positions │ │ - Events ← Rust    │    │
-│  └────────┬──────┘  │ - PnL       │ └──────────┬─────────┘    │
-│           │         └─────┬───────┘            │              │
-│           │               │                    │              │
-│           └───────────────┼────────────────────┘              │
-│                           │ PyO3 FFI                          │
-└───────────────────────────┼───────────────────────────────────┘
-                            │
-┌───────────────────────────┼───────────────────────────────────┐
-│                      RUST CORE (dexbot_core)                  │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │                    EVENT LOOP                           │  │
-│  │  ┌───────────┐  ┌───────────┐  ┌───────────────────┐    │  │
-│  │  │ Nonce     │  │ GasPrice  │  │ WebSocket Client  │    │  │
-│  │  │ Monitor   │  │ Monitor   │  │ - Pool Updates    │    │  │
-│  │  │ (prefetch)│  │ (prefetch)│  │ - Balance Updates │    │  │
-│  │  └───────────┘  └───────────┘  └───────────────────┘    │  │
-│  └─────────────────────────────────────────────────────────┘  │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │                   RPC POOL                              │  │
-│  │  [Node1] [Node2] [Node3] ... → Smart routing by latency │  │
-│  └─────────────────────────────────────────────────────────┘  │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │                 EXECUTION ENGINE                        │  │
-│  │  - Подписание транзакций (secp256k1)                    │  │
-│  │  - Nonce management                                     │  │
-│  │  - Auto-approve для sell                                │  │
-│  │  - Event deduplication                                  │  │
-│  └─────────────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-                    ┌───────────────┐
-                    │  EVM Network  │
-                    │  RPC / WSS    │
-                    └───────────────┘
++----------------------- PYTHON LAYER ------------------------+
+|                                                             |
+|  +------------+     +--------------+     +---------------+  |
+|  | TUI        |     | GlobalCache  |     | BridgeManager |  |
+|  | (Textual)  |---->| - Balances   |---->| - Commands    |  |
+|  | - Render   |     | - Positions  |     | - Events      |  |
+|  | - Input    |     | - PnL        |     |               |  |
+|  +------------+     +--------------+     +---------------+  |
+|                                                             |
++---------------------------|---------------------------------+
+                            | PyO3 FFI
++---------------------------|---------------------------------+
+|                     RUST CORE (dexbot_core)                 |
+|                                                             |
+|  EVENT LOOP                                                 |
+|  +-- Nonce Monitor (prefetch)    --> 0ms execution          |
+|  +-- GasPrice Monitor (prefetch) --> 0ms execution          |
+|  +-- WebSocket Client                                       |
+|      +-- Pool Updates                                       |
+|      +-- Balance Updates                                    |
+|                                                             |
+|  RPC POOL                                                   |
+|  +-- [Node1] [Node2] [Node3] --> Smart routing by latency   |
+|                                                             |
+|  EXECUTION ENGINE                                           |
+|  +-- Transaction signing (secp256k1)                        |
+|  +-- Nonce management                                       |
+|  +-- Auto-approve for sell                                  |
+|  +-- Event deduplication                                    |
+|                                                             |
++---------------------------|---------------------------------+
+                            v
+                     EVM Network
+                     RPC / WSS
 ```
 
 ---
@@ -76,53 +69,41 @@
 ## Поток данных
 
 ```
-Пользователь нажимает "КУПИТЬ"
-         │
-         ▼
-┌─────────────────────┐
-│ TUI: action_execute │
-│ - Валидация         │
-│ - Сбор данных       │
-└────────┬────────────┘
-         │ EngineCommand.ExecuteTrade
-         ▼
-┌─────────────────────┐
-│ BridgeManager.send()│
-│ - JSON сериализация │
-│ - Crossbeam channel │
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────────────────────┐
-│ RUST: Execution Engine              │
-│ 1. Взять nonce из CORE_STATE (RAM)  │  ← prefetch, 0ms
-│ 2. Взять gas_price из CORE_STATE    │  ← prefetch, 0ms
-│ 3. Подписать tx (secp256k1)         │  ← ~50μs
-│ 4. Выбрать fastest RPC node         │  ← smart pool
-│ 5. sendRawTransaction               │
-└────────┬────────────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ EVM Mempool         │
-│ Latency: 0.3-0.7s   │
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ RUST: Event → Python│
-│ - TxSent            │
-│ - TxConfirmed       │
-│ - BalanceUpdate     │
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ TUI: Обновление UI  │
-│ - Статус транзакции │
-│ - Баланс            │
-│ - PnL               │
-└─────────────────────┘
+User presses "BUY"
+        |
+        v
+TUI: action_execute
+  +-- Validation
+  +-- Collect data
+        |
+        | EngineCommand.ExecuteTrade
+        v
+BridgeManager.send()
+  +-- JSON serialization
+  +-- Crossbeam channel
+        |
+        v
+RUST: Execution Engine
+  +-- 1. Get nonce from CORE_STATE (RAM)    <-- prefetch, 0ms
+  +-- 2. Get gas_price from CORE_STATE      <-- prefetch, 0ms
+  +-- 3. Sign tx (secp256k1)                <-- ~50us
+  +-- 4. Select fastest RPC node            <-- smart pool
+  +-- 5. sendRawTransaction
+        |
+        v
+EVM Mempool (Latency: 0.3-0.7s)
+        |
+        v
+RUST: Event -> Python
+  +-- TxSent
+  +-- TxConfirmed
+  +-- BalanceUpdate
+        |
+        v
+TUI: UI Update
+  +-- Transaction status
+  +-- Balance
+  +-- PnL
 ```
 
 ---
@@ -193,7 +174,7 @@ _rust_event_handlers = {
 
 ### Деплой контракта
 
-Для работы в новой сети нужно задеплоить `TaxRouter` с параметрами конструктора (исходный код находится в папке `contract` данного репозитория):
+Для работы в новой сети нужно задеплоить `TaxRouter` с параметрами конструктора:
 
 ```solidity
 constructor(
@@ -334,8 +315,8 @@ uint public constant FEE_BASIS_POINTS = 0;  // 0%
 
 ### Сеть
 - VPS во Франкфурте/Лондоне (пинг к BSC nodes)
-- Или хотя бы проводной интернет 50+ Мбит/с
-- **Wi-Fi/4G недопустимы** — джиттер убьёт отклик с возможными проблемами с которыми я не сталкивался при разработке
+- Проводной интернет 50+ Мбит/с
+- **Wi-Fi/4G недопустимы** — джиттер убьёт latency
 
 ### Windows
 - **Обязательно:** [Windows Terminal](https://apps.microsoft.com/store/detail/windows-terminal/9N0DX20HK701)
