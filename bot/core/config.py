@@ -19,7 +19,10 @@ class Config:
         self.DB_PATH = network_settings['db_path']
         self.CHAIN_ID = network_settings['chain_id']
         self.RPC_URL = network_settings['rpc_url']
-        self.WSS_URL = self.RPC_URL.replace("https://", "wss://").replace("http://", "ws://")
+        if network_settings.get('wss_url'):
+            self.WSS_URL = network_settings['wss_url']
+        else:
+            self.WSS_URL = self.RPC_URL.replace("https://", "wss://").replace("http://", "ws://")
         
         self.NATIVE_CURRENCY_SYMBOL = network_settings['native_currency_symbol']
         self.NATIVE_CURRENCY_ADDRESS = network_settings['native_currency_address']

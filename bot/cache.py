@@ -1,20 +1,27 @@
 import asyncio
 import time
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional, Tuple
 from bot.core.db_manager import DatabaseManager
 from utils.aiologger import log
 
 class GlobalCache:
     def __init__(self, db_manager: DatabaseManager):
         self._wallets: Dict[str, Dict[str, Any]] = {}
-        self._config: Dict[str, Any] = {}
+        self.config: Dict[str, Any] = {}
         self.db = db_manager
         self._lock = asyncio.Lock()
         
         self._market_gas_price_wei: Optional[int] = None
         self._token_decimals: Dict[str, int] = {} 
         self._balances: Dict[str, Dict[str, float]] = {}
+        
+        # ОСНОВНОЙ КЭШ БАЛАНСОВ В WEI - работает мгновенно из памяти
         self._exact_balances_wei: Dict[str, Dict[str, int]] = {}
+        
+        # --- НОВЫЙ КЭШ ПОЗИЦИЙ (Cost) В ПАМЯТИ ---
+        # Key: "wallet_addr:token_addr" -> {'cost': int, 'amount': int}
+        self._positions: Dict[str, Dict[str, int]] = {}
+        
         self._active_trade_token: Optional[str] = None
         
         self._expected_amounts_out: Dict[str, Dict[str, Any]] = {} 
@@ -28,10 +35,13 @@ class GlobalCache:
         self._wallet_locks: Dict[str, asyncio.Lock] = {}
 
         self._quote_prices_usd: Dict[str, float] = {"USDT": 1.0, "USDC": 1.0, "USD1": 1.0}
+        
+        # Флаг для отложенного дампа в БД
+        self._pending_db_dump: bool = False
 
     async def initialize(self):
         async with self._lock:
-            self._config = await self.db.get_config()
+            self.config = await self.db.get_config()
             wallets_from_db = await self.db.get_all_wallets()
             for wallet_info in wallets_from_db:
                 address = wallet_info['address']
@@ -51,40 +61,202 @@ class GlobalCache:
                 
                 try:
                     wei = int(wei_str)
-                    if w_addr not in self._exact_balances_wei:
-                        self._exact_balances_wei[w_addr] = {}
-                    self._exact_balances_wei[w_addr][t_addr] = wei
-                    
-                    self._token_decimals[t_addr] = decimals
-                    
-                    if w_addr not in self._balances:
-                        self._balances[w_addr] = {}
-                    self._balances[w_addr][t_addr] = wei / (10 ** decimals)
-                    restored_count += 1
+                    if wei > 0:
+                        if w_addr not in self._exact_balances_wei:
+                            self._exact_balances_wei[w_addr] = {}
+                        self._exact_balances_wei[w_addr][t_addr] = wei
+                        
+                        self._token_decimals[t_addr] = decimals
+                        
+                        if w_addr not in self._balances:
+                            self._balances[w_addr] = {}
+                        self._balances[w_addr][t_addr] = wei / (10 ** decimals)
+                        restored_count += 1
                 except ValueError:
                     continue
             
-            if restored_count > 0:
-                await log.info(f"Восстановлено {restored_count} записей балансов из БД (будут проверены через RPC).")
+            # --- ВОССТАНОВЛЕНИЕ ПОЗИЦИЙ ИЗ БД В ПАМЯТЬ ---
+            all_positions = await self.db.get_all_positions()
+            pos_count = 0
+            
+            for row in all_positions:
+                w = row.get('wallet_address', '').lower()
+                t = row.get('token_address', '').lower()
+                key = f"{w}:{t}"
+                
+                c_wei = row.get('total_cost_wei') or '0'
+                a_wei = row.get('total_amount_wei') or '0'
+                
+                cost_val = int(c_wei) if c_wei and c_wei != '0' else 0
+                amount_val = int(a_wei) if a_wei and a_wei != '0' else 0
+                
+                self._positions[key] = {
+                    'cost': cost_val,
+                    'amount': amount_val
+                }
+                pos_count += 1
+                
+                await log.debug(f"[RESTORE POS] key={key[:30]}... | cost={cost_val} | amount={amount_val}")
+            
+            # DEBUG: Итоговое состояние позиций в памяти
+            if self._positions:
+                for k, v in self._positions.items():
+                    await log.debug(f"[MEMORY POS] {k[:30]}... | cost={v['cost']} | amount={v['amount']}")
+            
+            if restored_count > 0 or pos_count > 0:
+                await log.info(f"Восстановлено {restored_count} балансов и {pos_count} позиций из БД.")
 
-            # --- ЗАГРУЗКА КЭША ПУЛОВ ИЗ БД ---
-            cached_pools = await self.db.get_all_cached_pools()
-            for item in cached_pools:
-                key = f"{item['token_address']}_{item['quote_address']}"
-                self._best_pools[key] = item['pool_data']
-            if cached_pools:
-                await log.info(f"Восстановлено {len(cached_pools)} записей о пулах из БД.")
-            # ----------------------------------
+        await log.info(f"Кэш инициализирован. Загружено конфигов: {len(self.config)}, кошельков: {len(self._wallets)}")
 
-        await log.info(f"Кэш инициализирован. Загружено конфигов: {len(self._config)}, кошельков: {len(self._wallets)}")
+    # --- БЫСТРЫЕ МЕТОДЫ БАЛАНСОВ (из памяти) ---
+    
+    def set_exact_balance_wei(self, wallet_address: str, token_address: str, balance_wei: int):
+        """Установить баланс (из WebSocket события) - мгновенно"""
+        wallet_addr_lower = wallet_address.lower()
+        token_addr_lower = token_address.lower()
+        if wallet_addr_lower not in self._exact_balances_wei:
+            self._exact_balances_wei[wallet_addr_lower] = {}
+        self._exact_balances_wei[wallet_addr_lower][token_addr_lower] = balance_wei
+
+    def get_exact_balance_wei(self, wallet_address: str, token_address: str) -> Optional[int]:
+        """Получить баланс из кэша - мгновенно"""
+        return self._exact_balances_wei.get(wallet_address.lower(), {}).get(token_address.lower())
+
+    def add_token_balance(self, wallet_address: str, token_address: str, amount_wei: int, decimals: int = 18, save_to_db: bool = True) -> int:
+        wallet_addr_lower = wallet_address.lower()
+        token_addr_lower = token_address.lower()
+        
+        if wallet_addr_lower not in self._exact_balances_wei:
+            self._exact_balances_wei[wallet_addr_lower] = {}
+        
+        current = self._exact_balances_wei[wallet_addr_lower].get(token_addr_lower, 0)
+        new_balance = current + amount_wei
+        
+        self._exact_balances_wei[wallet_addr_lower][token_addr_lower] = new_balance
+        
+        if wallet_addr_lower not in self._balances:
+            self._balances[wallet_addr_lower] = {}
+        self._balances[wallet_addr_lower][token_addr_lower] = new_balance / (10 ** decimals)
+        
+        self._token_decimals[token_addr_lower] = decimals
+        
+        if save_to_db and new_balance > 0:
+            asyncio.create_task(self._save_balance_to_db(wallet_addr_lower, token_addr_lower, new_balance, decimals))
+        
+        return new_balance
+
+    def subtract_token_balance(self, wallet_address: str, token_address: str, amount_wei: int, decimals: int = 18, save_to_db: bool = True) -> int:
+        wallet_addr_lower = wallet_address.lower()
+        token_addr_lower = token_address.lower()
+        
+        current = self._exact_balances_wei.get(wallet_addr_lower, {}).get(token_addr_lower, 0)
+        new_balance = max(0, current - amount_wei)
+        
+        if wallet_addr_lower not in self._exact_balances_wei:
+            self._exact_balances_wei[wallet_addr_lower] = {}
+        
+        self._exact_balances_wei[wallet_addr_lower][token_addr_lower] = new_balance
+        
+        if wallet_addr_lower not in self._balances:
+            self._balances[wallet_addr_lower] = {}
+        self._balances[wallet_addr_lower][token_addr_lower] = new_balance / (10 ** decimals)
+        
+        if save_to_db:
+            if new_balance > 0:
+                asyncio.create_task(self._save_balance_to_db(wallet_addr_lower, token_addr_lower, new_balance, decimals))
+            else:
+                asyncio.create_task(self._delete_balance_from_db(wallet_addr_lower, token_addr_lower))
+        
+        return new_balance
+
+    async def _save_balance_to_db(self, wallet: str, token: str, balance_wei: int, decimals: int):
+        try: await self.db.save_cached_balance(wallet, token, balance_wei, decimals)
+        except Exception: pass
+
+    async def _delete_balance_from_db(self, wallet: str, token: str):
+        try: await self.db.delete_cached_balance(wallet, token)
+        except Exception: pass
+
+    async def get_or_load_balance_wei(self, wallet_address: str, token_address: str) -> int:
+        wallet_addr_lower = wallet_address.lower()
+        token_addr_lower = token_address.lower()
+        
+        cached = self._exact_balances_wei.get(wallet_addr_lower, {}).get(token_addr_lower)
+        if cached is not None and cached > 0:
+            return cached
+        
+        # Если в кэше нет, пробуем восстановить из позиции в памяти (если есть)
+        pos = self.get_position_memory(wallet_address, token_address)
+        if pos and pos['amount'] > 0:
+            # Восстанавливаем в кэш балансов
+            self.set_exact_balance_wei(wallet_address, token_address, pos['amount'])
+            return pos['amount']
+            
+        return 0
+
+    # --- УПРАВЛЕНИЕ ПОЗИЦИЯМИ (RAM + Async DB) ---
+
+    def update_position_memory(self, wallet: str, token: str, added_cost: int, added_amount: int):
+        """Обновляет позицию в памяти и БД"""
+        w = wallet.lower()
+        t = token.lower()
+        key = f"{w}:{t}"
+        
+        # Инициализируем если нет
+        if key not in self._positions:
+            self._positions[key] = {'cost': 0, 'amount': 0}
+        
+        # Обновляем память
+        self._positions[key]['cost'] += added_cost
+        self._positions[key]['amount'] += added_amount
+        
+        new_cost = self._positions[key]['cost']
+        new_amount = self._positions[key]['amount']
+        
+        asyncio.create_task(log.debug(f"[POSITION] {w[:8]}... | cost={new_cost} | amount={new_amount}"))
+        
+        # Отправляем ПОЛНЫЕ значения в БД (не дельту!)
+        asyncio.create_task(self.db.set_position(wallet, token, new_cost, new_amount))
+
+
+    def close_position_memory(self, wallet: str, token: str):
+        """Полностью закрывает позицию"""
+        key = f"{wallet.lower()}:{token.lower()}"
+        
+        if key in self._positions:
+            old_pos = self._positions[key]
+            asyncio.create_task(log.debug(
+                f"[POSITION CLOSE] {wallet[:8]}... | REMOVED cost={old_pos['cost']}, amount={old_pos['amount']}"
+            ))
+            del self._positions[key]
+        else:
+            asyncio.create_task(log.debug(f"[POSITION CLOSE] {wallet[:8]}... | KEY NOT FOUND in memory!"))
+        
+        asyncio.create_task(self.db.close_position(wallet, token))
+
+
+    def get_position_memory(self, wallet: str, token: str) -> Dict[str, int]:
+        """Мгновенное получение позиции из памяти"""
+        key = f"{wallet.lower()}:{token.lower()}"
+        return self._positions.get(key, {'cost': 0, 'amount': 0})
+
+    def get_open_positions_tokens(self) -> List[Tuple[str, str]]:
+        """Возвращает список (wallet, token) для открытых позиций с amount > 0"""
+        result = []
+        for key, pos in self._positions.items():
+            if pos.get('amount', 0) > 0:
+                parts = key.split(':')
+                if len(parts) == 2:
+                    result.append((parts[0], parts[1]))
+        return result
 
     # --- Получение списка всех токенов, которые есть на балансе ---
     def get_all_tracked_token_addresses(self) -> List[str]:
-        """Возвращает список уникальных адресов токенов, которые есть в кэше."""
         tokens = set()
         for balances in self._exact_balances_wei.values():
             for t_addr, amount in balances.items():
-                tokens.add(t_addr)
+                if amount > 0:
+                    tokens.add(t_addr)
         return list(tokens)
 
     # --- МЕТОДЫ ДЛЯ РАБОТЫ С ПУЛАМИ ---
@@ -121,16 +293,6 @@ class GlobalCache:
 
     def get_active_trade_amount_for_quote(self) -> Optional[float]:
         return self._active_trade_amount_for_quote
-
-    def set_exact_balance_wei(self, wallet_address: str, token_address: str, balance_wei: int):
-        wallet_addr_lower = wallet_address.lower()
-        token_addr_lower = token_address.lower()
-        if wallet_addr_lower not in self._exact_balances_wei:
-            self._exact_balances_wei[wallet_addr_lower] = {}
-        self._exact_balances_wei[wallet_addr_lower][token_addr_lower] = balance_wei
-
-    def get_exact_balance_wei(self, wallet_address: str, token_address: str) -> Optional[int]:
-        return self._exact_balances_wei.get(wallet_address.lower(), {}).get(token_address.lower())
 
     def set_token_decimals(self, token_address: str, decimals: int):
         self._token_decimals[token_address.lower()] = decimals
@@ -197,13 +359,13 @@ class GlobalCache:
         return {"status": "deleted"}
 
     def get_config(self) -> Dict[str, Any]:
-        return self._config
+        return self.config
 
     async def update_config(self, config_updates: Dict[str, Any]):
         async with self._lock:
             await self.db.update_config(config_updates)
-            self._config.update(config_updates)
-        return self._config
+            self.config.update(config_updates)
+        return self.config
 
     def set_expected_amount_out(self, token_in: str, token_out: str, amount_in: float, expected_amount_out_wei: int):
         key = f"{token_in.lower()}_{token_out.lower()}_{amount_in}"
@@ -228,4 +390,4 @@ class GlobalCache:
                         await self.db.save_cached_balance(w_addr, t_addr, wei, decimals)
                         count += 1
             if count > 0:
-                await log.info(f"Сохранено {count} записей балансов в БД.")
+                await log.info(f"Сохранено {count} записей балансов в БД перед выходом.")

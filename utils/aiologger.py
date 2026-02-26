@@ -247,7 +247,7 @@ class LoggerProxy:
         await self._ensure_initialized()
         cast(AsyncLogger, self._real_logger).custom_handler = handler
 
-    async def debug(self, message: Any, to_console: bool = True, to_file: bool = False, exc_info: bool = False) -> None:
+    async def debug(self, message: Any, to_console: bool = True, to_file: bool = True, exc_info: bool = False) -> None:
         await self._ensure_initialized()
         await cast(AsyncLogger, self._real_logger).debug(message, to_console, to_file, exc_info)
 

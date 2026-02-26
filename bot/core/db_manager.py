@@ -1,9 +1,13 @@
 import aiosqlite
+import asyncio
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from utils.security import SecurityManager
+from utils.aiologger import log
 
 SENSITIVE_KEYS = {'rpc_url'}
+# Четко определяем ключи, которые ВСЕГДА идут в глобальную БД
+GLOBAL_KEYS = {'last_network', 'system_tag', 'user_agreement_accepted'}
 
 class DatabaseManager:
     def __init__(self, db_path: str, global_db_path: str = "data/global.db"):
@@ -52,14 +56,6 @@ class DatabaseManager:
                     key TEXT PRIMARY KEY, value TEXT
                 )''')
             await cursor.execute('''
-                CREATE TABLE IF NOT EXISTS pending_trade_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    payload TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            # Таблица кэша балансов
-            await cursor.execute('''
                 CREATE TABLE IF NOT EXISTS cached_balances (
                     wallet_address TEXT,
                     token_address TEXT,
@@ -69,7 +65,6 @@ class DatabaseManager:
                     PRIMARY KEY (wallet_address, token_address)
                 )
             ''')
-            # Таблица кэша пулов
             await cursor.execute('''
                 CREATE TABLE IF NOT EXISTS cached_pools (
                     token_address TEXT,
@@ -79,13 +74,12 @@ class DatabaseManager:
                     PRIMARY KEY (token_address, quote_address)
                 )
             ''')
-            # --- Активные позиции (для PnL и DCA) ---
             await cursor.execute('''
                 CREATE TABLE IF NOT EXISTS active_positions (
                     wallet_address TEXT,
                     token_address TEXT,
-                    total_cost_wei TEXT, -- Сколько всего потрачено (quote token)
-                    total_amount_wei TEXT, -- Сколько всего куплено (base token)
+                    total_cost_wei TEXT,
+                    total_amount_wei TEXT,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (wallet_address, token_address)
                 )
@@ -116,7 +110,6 @@ class DatabaseManager:
         async with self.global_conn.cursor() as cursor: # type: ignore
             await cursor.execute("INSERT OR REPLACE INTO security (key_name, salt, verifier) VALUES ('main', ?, ?)", (salt, verifier))
         await self.global_conn.commit() # type: ignore
-        
         await self._migrate_plain_data()
 
     async def unlock_db(self, password: str) -> bool:
@@ -144,15 +137,14 @@ class DatabaseManager:
         for key in SENSITIVE_KEYS:
             if key in config:
                 val = str(config[key])
-                try:
-                    self.security.decrypt(val) 
+                try: self.security.decrypt(val) 
                 except Exception: 
                     encrypted_val = self.security.encrypt(val)
                     async with self.conn.cursor() as cursor: # type: ignore
                         await cursor.execute("UPDATE config SET value = ? WHERE key = ?", (encrypted_val, key))
         await self.conn.commit() # type: ignore
 
-    # --- Методы для кошельков ---
+    # --- Методы для кошельков (СТРОГО ЛОКАЛЬНАЯ БД) ---
     async def add_wallet(self, address: str, private_key: str, name: str, enabled: bool):
         encrypted_pk = self.security.encrypt(private_key)
         async with self.conn.cursor() as cursor: # type: ignore
@@ -196,35 +188,31 @@ class DatabaseManager:
             await cursor.execute("DELETE FROM wallets WHERE address = ?", (address,))
         await self.conn.commit() # type: ignore
 
-    # --- Методы Config ---
+    # --- Методы Config (СМЕШАННЫЕ: ГЛОБАЛ + ЛОКАЛ) ---
     async def get_config(self, raw: bool = False) -> Dict[str, Any]:
         config = {}
+        # 1. Читаем локальные настройки (сеть)
         async with self.conn.cursor() as cursor:  # type: ignore
             await cursor.execute("SELECT key, value FROM config")
             rows = await cursor.fetchall()
         for row in rows:
             key, value = row['key'], row['value']
-            if value is None:
-                config[key] = None; continue
+            if value is None: config[key] = None; continue
             if not raw and key in SENSITIVE_KEYS and self.security.is_active():
                 try: value = self.security.decrypt(value)
                 except Exception: pass
             
-            # --- Корректный парсинг Boolean и чисел ---
+            # Парсинг
             if isinstance(value, str):
-                if value.lower() == 'true':
-                    config[key] = True
-                    continue
-                elif value.lower() == 'false':
-                    config[key] = False
-                    continue
-            
+                if value.lower() == 'true': config[key] = True; continue
+                elif value.lower() == 'false': config[key] = False; continue
             try:
                 float_val = float(value)
                 config[key] = int(float_val) if float_val.is_integer() else float_val
             except (ValueError, TypeError):
                 config[key] = value
         
+        # 2. Читаем глобальные настройки (поверх локальных)
         async with self.global_conn.cursor() as cursor: # type: ignore
             await cursor.execute("SELECT key, value FROM global_settings")
             rows = await cursor.fetchall()
@@ -234,10 +222,8 @@ class DatabaseManager:
         return config
 
     async def update_config(self, config_data: Dict[str, Any]):
-        # --- Добавляем 'user_agreement_accepted' в список глобальных ключей ---
-        global_keys = ['last_network', 'system_tag', 'user_agreement_accepted']
-        network_updates = {k: v for k, v in config_data.items() if k not in global_keys}
-        global_updates = {k: v for k, v in config_data.items() if k in global_keys}
+        network_updates = {k: v for k, v in config_data.items() if k not in GLOBAL_KEYS}
+        global_updates = {k: v for k, v in config_data.items() if k in GLOBAL_KEYS}
         
         if network_updates:
             async with self.conn.cursor() as cursor: # type: ignore
@@ -254,19 +240,28 @@ class DatabaseManager:
                     await cursor.execute("INSERT OR REPLACE INTO global_settings (key, value) VALUES (?, ?)", (key, str(value)))
             await self.global_conn.commit() # type: ignore
             
-    # --- Методы Tokens ---
-    async def add_or_update_recent_token(self, token_address: str, name: Optional[str] = None, symbol: Optional[str] = None):
+    # --- Методы Tokens (ЛОКАЛЬНЫЕ) ---
+    async def add_or_update_recent_token(self, token_address: str, name: Optional[str] = None, symbol: Optional[str] = None, max_tokens: int = 50):
         token_address = token_address.lower()
         async with self.conn.cursor() as cursor: # type: ignore
+            # Сохраняем/обновляем токен
             await cursor.execute("SELECT name, symbol FROM recent_tokens WHERE token_address = ?", (token_address,))
             row = await cursor.fetchone()
             if row:
                 if name is None: name = row['name']
                 if symbol is None: symbol = row['symbol']
             await cursor.execute("""INSERT OR REPLACE INTO recent_tokens (token_address, name, symbol, last_traded_at) 
-                   VALUES (?, ?, ?, CURRENT_TIMESTAMP)""", (token_address, name, symbol))
-            await cursor.execute("""DELETE FROM recent_tokens WHERE token_address NOT IN (
-                    SELECT token_address FROM recent_tokens ORDER BY last_traded_at DESC LIMIT 20)""")
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)""", (token_address, name, symbol))
+            
+            # Автоматическая очистка старых записей если превышен лимит
+            await cursor.execute("""
+                DELETE FROM recent_tokens 
+                WHERE token_address NOT IN (
+                    SELECT token_address FROM recent_tokens 
+                    ORDER BY last_traded_at DESC 
+                    LIMIT ?
+                )
+            """, (max_tokens,))
         await self.conn.commit() # type: ignore
     
     async def get_recent_tokens(self, limit: int = 20) -> List[Dict[str, Any]]:
@@ -281,138 +276,92 @@ class DatabaseManager:
             row = await cursor.fetchone()
         return dict(row) if row else None
 
-    # --- Методы Events ---
-    async def save_pending_event(self, payload: Dict[str, Any]):
-        import json
-        try:
-            json_str = json.dumps(payload)
-            async with self.conn.cursor() as cursor: # type: ignore
-                await cursor.execute("INSERT INTO pending_trade_events (payload) VALUES (?)", (json_str,))
-            await self.conn.commit() # type: ignore
-        except Exception as e:
-            print(f"DB Error save_pending_event: {e}")
-
-    async def get_pending_events(self, limit: int = 50) -> List[Dict[str, Any]]:
-        import json
-        results = []
-        try:
-            async with self.conn.cursor() as cursor: # type: ignore
-                await cursor.execute("SELECT id, payload FROM pending_trade_events ORDER BY created_at ASC LIMIT ?", (limit,))
-                rows = await cursor.fetchall()
-                for row in rows:
-                    try:
-                        data = json.loads(row['payload'])
-                        results.append({'id': row['id'], 'data': data})
-                    except: pass
-        except Exception: pass
-        return results
-
-    async def delete_pending_events(self, ids: List[int]):
-        if not ids: return
-        try:
-            placeholders = ','.join('?' for _ in ids)
-            async with self.conn.cursor() as cursor: # type: ignore
-                await cursor.execute(f"DELETE FROM pending_trade_events WHERE id IN ({placeholders})", tuple(ids))
-            await self.conn.commit() # type: ignore
-        except Exception as e:
-            print(f"DB Error delete_pending_events: {e}")
-
-    # --- МЕТОДЫ ДЛЯ БАЛАНСОВ (PERSISTENCE) ---
+    # --- МЕТОДЫ ДЛЯ БАЛАНСОВ/ПУЛОВ (ЛОКАЛЬНЫЕ) ---
     async def save_cached_balance(self, wallet_address: str, token_address: str, balance_wei: int, decimals: int):
-        async with self.conn.cursor() as cursor: # type: ignore
+        async with self.conn.cursor() as cursor:
             await cursor.execute("""
                 INSERT OR REPLACE INTO cached_balances (wallet_address, token_address, balance_wei, decimals, updated_at)
                 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (wallet_address.lower(), token_address.lower(), str(balance_wei), decimals))
-        await self.conn.commit() # type: ignore
+        await self.conn.commit()
 
     async def get_all_cached_balances(self) -> List[Dict[str, Any]]:
-        async with self.conn.cursor() as cursor: # type: ignore
+        async with self.conn.cursor() as cursor:
             await cursor.execute("SELECT wallet_address, token_address, balance_wei, decimals FROM cached_balances")
             rows = await cursor.fetchall()
         return [dict(row) for row in rows]
-
+    
     async def delete_cached_balance(self, wallet_address: str, token_address: str):
-        async with self.conn.cursor() as cursor: # type: ignore
-            await cursor.execute("""
-                DELETE FROM cached_balances 
-                WHERE wallet_address = ? AND token_address = ?
-            """, (wallet_address.lower(), token_address.lower()))
-        await self.conn.commit() # type: ignore
+        async with self.conn.cursor() as cursor:
+            await cursor.execute("DELETE FROM cached_balances WHERE wallet_address = ? AND token_address = ?", (wallet_address.lower(), token_address.lower()))
+        await self.conn.commit()
 
-    # --- МЕТОДЫ ДЛЯ КЭША ПУЛОВ ---
     async def save_cached_pool(self, token_address: str, quote_address: str, pool_data: dict):
         import json
         pool_data_json = json.dumps(pool_data)
-        async with self.conn.cursor() as cursor: # type: ignore
+        async with self.conn.cursor() as cursor:
             await cursor.execute("""
                 INSERT OR REPLACE INTO cached_pools (token_address, quote_address, pool_data_json, updated_at)
                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
             """, (token_address.lower(), quote_address.lower(), pool_data_json))
-        await self.conn.commit() # type: ignore
+        await self.conn.commit()
 
     async def get_all_cached_pools(self) -> List[Dict[str, Any]]:
         import json
         results = []
-        async with self.conn.cursor() as cursor: # type: ignore
+        async with self.conn.cursor() as cursor:
             await cursor.execute("SELECT token_address, quote_address, pool_data_json FROM cached_pools")
             rows = await cursor.fetchall()
             for row in rows:
-                try:
-                    results.append({
-                        "token_address": row["token_address"],
-                        "quote_address": row["quote_address"],
-                        "pool_data": json.loads(row["pool_data_json"])
-                    })
+                try: results.append({"token_address": row["token_address"], "quote_address": row["quote_address"], "pool_data": json.loads(row["pool_data_json"])})
                 except: continue
         return results
 
     async def delete_cached_pool(self, token_address: str, quote_address: str):
-        async with self.conn.cursor() as cursor: # type: ignore
-            await cursor.execute("""
-                DELETE FROM cached_pools 
-                WHERE token_address = ? AND quote_address = ?
-            """, (token_address.lower(), quote_address.lower()))
-        await self.conn.commit() # type: ignore
+        async with self.conn.cursor() as cursor:
+            await cursor.execute("DELETE FROM cached_pools WHERE token_address = ? AND quote_address = ?", (token_address.lower(), quote_address.lower()))
+        await self.conn.commit()
 
-    # --- НОВЫЕ МЕТОДЫ: PnL / Positions ---
-    async def update_position(self, wallet: str, token: str, cost_added_wei: int, amount_added_wei: int = 0):
-        """Обновляет позицию (DCA) - добавляет затраты к существующим."""
+    async def set_position(self, wallet: str, token: str, total_cost_wei: int, total_amount_wei: int):
+        """Устанавливает позицию (атомарно, без чтения текущего состояния)"""
         w = wallet.lower()
         t = token.lower()
-        async with self.conn.cursor() as cursor: # type: ignore
-            # 1. Получаем текущую позицию
-            await cursor.execute("SELECT total_cost_wei, total_amount_wei FROM active_positions WHERE wallet_address=? AND token_address=?", (w, t))
-            row = await cursor.fetchone()
-            
-            current_cost = int(row['total_cost_wei']) if row else 0
-            current_amount = int(row['total_amount_wei']) if row and row['total_amount_wei'] else 0
-            
-            new_cost = current_cost + cost_added_wei
-            new_amount = current_amount + amount_added_wei
-            
+        
+        await log.debug(f"[DB SET_POS] w={w[:10]}... | t={t[:10]}... | cost={total_cost_wei} | amount={total_amount_wei}")
+        
+        async with self.conn.cursor() as cursor:
             await cursor.execute("""
                 INSERT INTO active_positions (wallet_address, token_address, total_cost_wei, total_amount_wei)
                 VALUES (?, ?, ?, ?) 
                 ON CONFLICT(wallet_address, token_address) 
                 DO UPDATE SET total_cost_wei = ?, total_amount_wei = ?, updated_at = CURRENT_TIMESTAMP
-            """, (w, t, str(new_cost), str(new_amount), str(new_cost), str(new_amount)))
-        await self.conn.commit() # type: ignore
+            """, (w, t, str(total_cost_wei), str(total_amount_wei), str(total_cost_wei), str(total_amount_wei)))
+        await self.conn.commit()
 
     async def get_position(self, wallet: str, token: str) -> Dict[str, int]:
-        """Возвращает total_cost и total_amount для кошелька."""
-        async with self.conn.cursor() as cursor: # type: ignore
+        async with self.conn.cursor() as cursor:
             await cursor.execute("SELECT total_cost_wei, total_amount_wei FROM active_positions WHERE wallet_address=? AND token_address=?", (wallet.lower(), token.lower()))
             row = await cursor.fetchone()
-            if row:
-                return {
-                    'total_cost': int(row['total_cost_wei']),
-                    'total_amount': int(row['total_amount_wei'] or 0)
-                }
+            if row: return {'total_cost': int(row['total_cost_wei']), 'total_amount': int(row['total_amount_wei'] or 0)}
             return {'total_cost': 0, 'total_amount': 0}
 
+    async def get_all_positions(self) -> List[Dict[str, Any]]:
+        async with self.conn.cursor() as cursor:
+            await cursor.execute("SELECT wallet_address, token_address, total_cost_wei, total_amount_wei FROM active_positions")
+            rows = await cursor.fetchall()
+        results = [dict(row) for row in rows]
+        
+        # DEBUG: Что в БД
+        for r in results:
+            w = r.get('wallet_address', '')[:10]
+            t = r.get('token_address', '')[:10]
+            c = r.get('total_cost_wei', '0')
+            a = r.get('total_amount_wei', '0')
+            asyncio.create_task(log.debug(f"[DB POS] wallet={w}... | token={t}... | cost_wei={c} | amount_wei={a}"))
+        
+        return results
+
     async def close_position(self, wallet: str, token: str):
-        """Закрывает позицию (удаляет запись) при полной продаже."""
-        async with self.conn.cursor() as cursor: # type: ignore
+        async with self.conn.cursor() as cursor:
             await cursor.execute("DELETE FROM active_positions WHERE wallet_address=? AND token_address=?", (wallet.lower(), token.lower()))
-        await self.conn.commit() # type: ignore
+        await self.conn.commit()
