@@ -145,8 +145,6 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
     user_rpc = config_db.get('rpc_url')
     requires_private = getattr(app_config, 'REQUIRES_PRIVATE_RPC', False)
 
-    await log.info(f"DEBUG: user_rpc={user_rpc}, requires_private={requires_private}")
-
     if requires_private and not user_rpc:
         await log.error("="*60)
         await log.error("⚠️  Для данной сети (BSC Testnet) ОБЯЗАТЕЛЕН приватный RPC!")
@@ -219,7 +217,7 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
     TUI_APP_INSTANCE = None
     
     # Отладка
-    await log.info(f"DEBUG: next_network={next_network}, USER_INITIATED_SHUTDOWN={USER_INITIATED_SHUTDOWN}, current={network_name}")
+    #await log.debug(f"[BOT RELOAD] next_network={next_network}, USER_INITIATED_SHUTDOWN={USER_INITIATED_SHUTDOWN}, current={network_name}")
     
     # ПОЛНЫЙ ПЕРЕЗАПУСК при смене сети ИЛИ при RESTART_SAME_NETWORK
     should_restart = next_network and not USER_INITIATED_SHUTDOWN

@@ -1111,11 +1111,9 @@ class TradingApp(App):
         quote_symbol = str(self.query_one("#trade_quote_select").value)
         quote_address = self.app_config.QUOTE_TOKENS.get(quote_symbol, "")
         
-        # === ОТЛАДКА ===
-        await log.debug(f"[SWITCH_TOKEN] token={token_address[:16]}... | quote_symbol={quote_symbol} | quote_address={quote_address[:16] if quote_address else 'NONE'}...")
-        await log.debug(f"[SWITCH_TOKEN] v2_factory={self.app_config.V2_FACTORY_ADDRESS}")
-        await log.debug(f"[SWITCH_TOKEN] rpc_url={self.app_config.RPC_URL[:50]}...")
-        # ===============
+        # await log.debug(f"[SWITCH_TOKEN] token={token_address[:16]}... | quote_symbol={quote_symbol} | quote_address={quote_address[:16] if quote_address else 'NONE'}...")
+        # await log.debug(f"[SWITCH_TOKEN] v2_factory={self.app_config.V2_FACTORY_ADDRESS}")
+        # await log.debug(f"[SWITCH_TOKEN] rpc_url={self.app_config.RPC_URL[:50]}...")
         
         # Сохраняем quote для фильтрации
         self._current_quote_address = quote_address.lower() if quote_address else None
