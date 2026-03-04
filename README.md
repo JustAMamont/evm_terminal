@@ -217,7 +217,7 @@ python main.py
 | Buy | 0.1% вычитается из входящей суммы |
 | Sell | 0.1% вычитается из полученной суммы |
 
-📖 **Инструкция по деплою и настройке:** см. [contracts/README.md](contracts/README.md)
+📖 **Инструкция по деплою и настройке:** см. [contract/README.md](contract/README.md)
 
 ---
 
@@ -254,7 +254,7 @@ python main.py
 | Раздел | Файл |
 |--------|------|
 | Конфигурация сетей | [networks/README.md](networks/README.md) |
-| Деплой контрактов | [contracts/README.md](contracts/README.md) |
+| Деплой контрактов | [contract/README.md](contract/README.md) |
 
 ---
 
