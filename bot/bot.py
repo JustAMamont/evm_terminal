@@ -3,7 +3,7 @@ import os
 import asyncio
 import signal
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from rich.console import Console
 from rich.prompt import Prompt
@@ -64,7 +64,7 @@ async def save_last_network(db_manager: DatabaseManager, network_name: str):
     try: await db_manager.update_config({"last_network": network_name})
     except: pass
 
-async def load_last_network(db_manager: DatabaseManager, available_networks: list) -> str:
+async def load_last_network(db_manager: DatabaseManager, available_networks: List[str]) -> str:
     try:
         config = await db_manager.get_config()
         last = config.get('last_network')
@@ -96,7 +96,7 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
     await save_last_network(db_manager, network_name)
     
     try:
-        master_password = await secure_db_unlock(db_manager, network_name)
+        await secure_db_unlock(db_manager, network_name)
     except KeyboardInterrupt:
         await db_manager.close()
         os._exit(0)
@@ -143,6 +143,22 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
             continue
     
     user_rpc = config_db.get('rpc_url')
+    requires_private = getattr(app_config, 'REQUIRES_PRIVATE_RPC', False)
+
+    await log.info(f"DEBUG: user_rpc={user_rpc}, requires_private={requires_private}")
+
+    if requires_private and not user_rpc:
+        await log.error("="*60)
+        await log.error("⚠️  Для данной сети (BSC Testnet) ОБЯЗАТЕЛЕН приватный RPC!")
+        await log.error("   Публичные RPC не поддерживают WebSocket.")
+        await log.error("   Введите приватный RPC endpoint в Settings → RPC URL")
+        await log.error("="*60)
+        TUI_APP_INSTANCE.notify(
+            "⚠️ Для BSC Testnet обязателен приватный RPC!\n(Chainstack, Infura, etc.)\nНастройте в Settings",
+            severity="error",
+            timeout=30
+        )
+    
     final_rpc = user_rpc if user_rpc else app_config.RPC_URL
     
     if user_rpc and user_rpc != app_config.RPC_URL:
@@ -192,7 +208,8 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
 
     next_network = await TUI_APP_INSTANCE.run_async()
     
-    if next_network:
+    # Не сохраняем RESTART_SAME_NETWORK в БД
+    if next_network and next_network != "RESTART_SAME_NETWORK":
         await save_last_network(db_manager, next_network)
 
     await market_data_service.stop()
@@ -204,9 +221,14 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
     # Отладка
     await log.info(f"DEBUG: next_network={next_network}, USER_INITIATED_SHUTDOWN={USER_INITIATED_SHUTDOWN}, current={network_name}")
     
-    # ПОЛНЫЙ ПЕРЕЗАПУСК ТОЛЬКО при смене сети
-    if next_network and not USER_INITIATED_SHUTDOWN and next_network != network_name:
-        await log.info(f"Перезапуск для сети: {next_network}")
+    # ПОЛНЫЙ ПЕРЕЗАПУСК при смене сети ИЛИ при RESTART_SAME_NETWORK
+    should_restart = next_network and not USER_INITIATED_SHUTDOWN
+    is_network_change = next_network != network_name and next_network != "RESTART_SAME_NETWORK"
+    is_same_network_restart = next_network == "RESTART_SAME_NETWORK"
+    
+    if should_restart and (is_network_change or is_same_network_restart):
+        actual_network = network_name if is_same_network_restart else next_network
+        await log.info(f"Перезапуск для сети: {actual_network}")
         await asyncio.sleep(1)
         os.execv(sys.executable, [sys.executable] + sys.argv)
     

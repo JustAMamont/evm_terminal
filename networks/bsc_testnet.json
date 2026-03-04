@@ -2,8 +2,8 @@
     "name": "BSC Testnet",
     "db_path": "data/bsc_testnet.db",
     "chain_id": 97,
-    "rpc_url": "https://bsc-testnet.core.chainstack.com/d7ba2b616663dc7959822711b13e79bc",
-    "wss_url": "wss://bsc-testnet.core.chainstack.com/d7ba2b616663dc7959822711b13e79bc",
+    "rpc_url": "https://data-seed-prebsc-1-s1.binance.org:8545/",
+    "wss_url": "",
     "native_currency_symbol": "BNB",
     "native_currency_address": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "explorer_url": "https://testnet.bscscan.com/",
@@ -16,7 +16,9 @@
         "https://data-seed-prebsc-1-s1.binance.org:8545/",
         "https://data-seed-prebsc-2-s1.binance.org:8545/",
         "https://data-seed-prebsc-1-s2.binance.org:8545/",
-        "https://data-seed-prebsc-2-s2.binance.org:8545/"
+        "https://data-seed-prebsc-2-s2.binance.org:8545/",
+        "https://bsc-testnet.public.blastapi.io",
+        "https://endpoints.omniatech.io/v1/bsc/testnet/public"
     ],
     "fee_receiver": "0xE54094d99d71F87D1f986E23F9ae3d1ABcD56647",
     "default_quote_currency": "WBNB",
@@ -24,5 +26,7 @@
         "WBNB": "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd",
         "BUSD": "0x78867bbeef44f2326bf3816fb87fcc56783aefd7",
         "USDT": "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd"
-    }
+    },
+    "min_native_for_gas": 0.00005,
+    "requires_private_rpc": true
 }

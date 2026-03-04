@@ -45,7 +45,13 @@ impl RpcPoolState {
 
     pub fn get_fastest_pool(&self, limit: usize) -> Vec<String> {
         let mut sorted = self.nodes.clone();
-        sorted.sort_by(|a, b| a.latency.cmp(&b.latency));
+        sorted.sort_by(|a, b| {
+            match (a.is_private, b.is_private) {
+                (true, false) => std::cmp::Ordering::Less,  // приватный всегда первый
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.latency.cmp(&b.latency),  // оба одинаковые - по latency
+            }
+        });
         sorted.iter()
             .filter(|n| n.fails < 3)
             .take(limit)

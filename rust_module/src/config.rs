@@ -24,6 +24,7 @@ pub struct NetworkConfig {
     pub fee_receiver: Option<String>,
     pub default_quote_currency: String,
     pub quote_tokens: HashMap<String, String>,
+    pub requires_private_rpc: Option<bool>
 }
 
 #[pyfunction]
@@ -84,6 +85,7 @@ pub fn get_network_config(py: Python<'_>, network_name: String) -> PyResult<PyOb
     if let Some(v) = config.v3_quoter_address { dict.set_item("v3_quoter_address", v)?; }
     if let Some(v) = config.public_rpc_urls { dict.set_item("public_rpc_urls", v)?; }
     if let Some(v) = config.fee_receiver { dict.set_item("fee_receiver", v)?; }
+    if let Some(v) = config.requires_private_rpc { dict.set_item("requires_private_rpc", v)?; }
 
     let quote_tokens_dict = PyDict::new(py);
     for (key, value) in config.quote_tokens {

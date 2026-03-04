@@ -19,6 +19,7 @@ class Config:
         self.DB_PATH = network_settings['db_path']
         self.CHAIN_ID = network_settings['chain_id']
         self.RPC_URL = network_settings['rpc_url']
+        
         if network_settings.get('wss_url'):
             self.WSS_URL = network_settings['wss_url']
         else:
@@ -40,6 +41,10 @@ class Config:
         self.QUOTE_TOKENS = network_settings['quote_tokens']
         self.DEFAULT_QUOTE_CURRENCY = network_settings['default_quote_currency']
         self.ERC20_QUOTES_TICKERS: List[str] = self._generate_tickers()
+
+        self.MIN_NATIVE_FOR_GAS = network_settings.get("min_native_for_gas", 0.00005)
+        self.REQUIRES_PRIVATE_RPC = network_settings.get("requires_private_rpc", False) # Это поле в bsc_testnet.json нужно обязательно задавать как `true` т.к данная сеть требует наличия приватной ноды в БД
+        
 
         self.APPROVE_GAS_LIMIT = 100_000
         self.DEFAULT_GAS_PRICE_GWEI = 0.1

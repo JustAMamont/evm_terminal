@@ -824,43 +824,77 @@ pub async fn discover_pools(token: Address, quote: Address) -> Vec<Address> {
     let (v2_f, v3_f) = { let s = CORE_STATE.read().unwrap(); (s.v2_factory_address, s.v3_factory_address) };
     let rpc_urls = { RPC_POOL.read().unwrap().get_fastest_pool(5) };
     
+    // === ДОБАВИТЬ ЛОГИ ===
+    emit_log("DEBUG", format!("discover_pools: {} RPC URLs", rpc_urls.len()));
+    for (i, url) in rpc_urls.iter().enumerate() {
+        emit_log("DEBUG", format!("  RPC[{}]: {}...", i, &url[..50.min(url.len())]));
+    }
+    
     let provider_http = {
         let mut result = None;
         for url in rpc_urls {
             if let Ok(u) = Url::parse(&url) {
                 let p = Arc::new(Provider::new(Http::new_with_client(u, GLOBAL_HTTP_CLIENT.clone())));
-                if timeout(Duration::from_secs(3), p.get_block_number()).await.is_ok() { 
-                    result = Some(p); 
-                    break; 
+                match timeout(Duration::from_secs(3), p.get_block_number()).await {
+                    Ok(_) => {
+                        emit_log("DEBUG", format!("RPC OK: {}", &url[..50.min(url.len())]));
+                        result = Some(p);
+                        break;
+                    }
+                    Err(_) => {
+                        emit_log("WARNING", format!("RPC TIMEOUT: {}", &url[..50.min(url.len())]));
+                    }
                 }
             }
         }
         result
     }; 
     
-    let p = if let Some(provider) = provider_http { provider } else { return targets; };
+    let p = if let Some(provider) = provider_http { 
+        emit_log("DEBUG", "Provider selected successfully".to_string());
+        provider 
+    } else { 
+        emit_log("ERROR", "NO PROVIDER - all RPCs failed!".to_string());
+        return targets; 
+    };
     
+    // === V2 ===
+    emit_log("DEBUG", format!("V2 factory: {:?}", v2_f));
     if v2_f != Address::zero() {
         let f = UniversalABI::new(v2_f, p.clone());
-        if let Ok(pair) = f.get_pair(token, quote).call().await { 
-            if pair != Address::zero() { targets.push(pair); } 
+        match f.get_pair(token, quote).call().await {
+            Ok(pair) => {
+                emit_log("DEBUG", format!("get_pair result: {:?}", pair));
+                if pair != Address::zero() { targets.push(pair); }
+            }
+            Err(e) => {
+                emit_log("ERROR", format!("get_pair error: {:?}", e));
+            }
         }
     }
     
+    // === V3 ===
     if v3_f != Address::zero() {
         let f = UniversalABI::new(v3_f, p.clone());
         for fee in [100, 500, 2500, 10000] {
-            if let Ok(pool) = f.get_pool(token, quote, fee).call().await {
-                if pool != Address::zero() { 
-                    targets.push(pool); 
-                    CORE_STATE.write().unwrap().v3_states.insert(pool, V3PoolState { 
-                        pool_fee: fee, ..Default::default() 
-                    });
+            match f.get_pool(token, quote, fee).call().await {
+                Ok(pool) => {
+                    if pool != Address::zero() { 
+                        emit_log("DEBUG", format!("V3 pool found: fee={}, addr={:?}", fee, pool));
+                        targets.push(pool); 
+                        CORE_STATE.write().unwrap().v3_states.insert(pool, V3PoolState { 
+                            pool_fee: fee, ..Default::default() 
+                        });
+                    }
+                }
+                Err(e) => {
+                    emit_log("DEBUG", format!("V3 fee {} error: {:?}", fee, e));
                 }
             }
         }
     }
     
+    emit_log("DEBUG", format!("discover_pools: {} targets found", targets.len()));
     targets
 }
 

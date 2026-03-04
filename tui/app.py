@@ -25,6 +25,7 @@ from utils.aiologger import log, LogLevel
 from bot.cache import GlobalCache
 from bot.core.bridge import BridgeManager, EngineCommand, AutoFuelSettings
 from bot.core.config import Config
+from tui.help import HELP_TEXT
 
 try:
     import dexbot_core
@@ -33,55 +34,6 @@ except ImportError:
     dexbot_core = None
     RUST_AVAILABLE = False
 
-
-HELP_TEXT = """
----
-
-# 🚀 Руководство пользователя EVM_TRADER
-
-**EVM_TRADER** — это высокоскоростной терминал для торговли на децентрализованных биржах (DEX).
-
----
-
-### 1. Первичная настройка (Безопасность)
-При первом запуске бот попросит создать **Мастер-пароль**.
-- Он шифрует ваши приватные ключи локально в папке `data`.
-- Бот работает полностью автономно.
-
-### 2. Подключение к сети (Вкладка Settings)
-- Используйте быстрый **RPC URL** (желательно приватный).
-- Выберите **Стейблкоин** для торгов (обычно WBNB или USDT).
-
-### 3. Управление кошельками (Вкладка Wallets)
-- Добавьте приватные ключи ваших кошельков.
-- Убедитесь, что на кошельках есть нативная монета для оплаты газа.
-
-### 4. Торговля (Вкладка Trade)
-**Покупка (BUY):**
-1. Вставьте адрес токена.
-2. Введите сумму (число или %).
-3. Нажмите **КУПИТЬ** или `Enter`.
-
-**Продажа (SELL):**
-1. Токен должен быть активен (выбран в поле адреса).
-2. Нажмите `Down` или выберите панель **SELL**.
-3. Нажмите **ПРОДАТЬ**.
-4. **SELL всегда продаёт 100% купленных токенов!**
-
----
-
-### ⌨️ Горячие клавиши
-*   `T`: Торговля
-*   `W`: Кошельки
-*   `S`: Настройки
-*   `L`: Логи
-*   `F`: Помощь
-*   `↑ / ↓`: Смена режима BUY / SELL (только на вкладке Торговля).
-*   `Enter`: Выполнить операцию.
-*   `Ctrl+R`: Перезагрузить кошельки
-
----
-"""
 
 # ===================== ВАЛИДАТОРЫ =====================
 
@@ -616,6 +568,7 @@ class TradingApp(App):
         self.notify(f"🏊 Пул: {data.get('pool_type')} TVL ${data.get('liquidity_usd', 0):,.0f}", severity="information", timeout=4)
         
     async def _evt_pool_error(self, data: dict):
+        await log.error(f"[POOL_ERROR] FULL DATA: {data}")
         event_token = data.get('token', '').lower()
         event_quote = data.get('quote', '').lower()
         if not self._is_event_for_current_pair(event_token, event_quote):
@@ -651,6 +604,7 @@ class TradingApp(App):
         self.ui_update_queue.put_nowait("refresh_market_data")
 
     async def _evt_pool_not_found(self, data: dict):
+        await log.error(f"[POOL_NOT_FOUND] FULL DATA: {data}")
         event_token = data.get('token', '').lower()
         event_quote = data.get('quote', '').lower()
         if not self._is_event_for_current_pair(event_token, event_quote):
@@ -865,8 +819,17 @@ class TradingApp(App):
             tx_result = self._tx_tracker.confirm_tx(tx_hash, gas_used, 0)
             latency_ms = tx_result.get('latency_ms', 0) if tx_result else 0
             
-            await log.error(f"<red>[TX FAILED]</red> {action_ru} {short_wallet} | Latency: {latency_ms:.0f}ms | Reason: {message}")
-            self.notify(f"❌ {action_ru} ошибка!\nLatency: {latency_ms:.0f}ms\n{message[:60] if message else 'Unknown error'}", severity="error", title=f"{action_ru}", timeout=8)
+            # Проверка на недостаток газа/средств
+            error_message = message if message else 'Unknown error'
+            native_symbol = self.app_config.NATIVE_CURRENCY_SYMBOL
+            
+            if "insufficient funds" in error_message.lower() or "gas required exceeds" in error_message.lower():
+                error_message = f"Недостаточно {native_symbol} для оплаты газа"
+                await log.error(f"<red>[TX ERROR]</red> {action_ru} {short_wallet} | {error_message}")
+            else:
+                await log.error(f"<red>[TX FAILED]</red> {action_ru} {short_wallet} | Latency: {latency_ms:.0f}ms | Reason: {error_message}")
+            
+            self.notify(f"❌ {action_ru} ошибка!\n{error_message[:80] if error_message else 'Unknown error'}", severity="error", title=f"{action_ru}", timeout=8)
             
             # Откат баланса при ошибке продажи
             if action == "sell" and token_address and wallet and tokens_sold:
@@ -874,7 +837,6 @@ class TradingApp(App):
                     sold_wei = int(tokens_sold)
                     if sold_wei > 0:
                         self.cache.add_token_balance(wallet, token_address, sold_wei, decimals=token_decimals, save_to_db=True)
-                        #await log.debug(f"[ROLLBACK] +{sold_wei} tokens -> {short_wallet}")
                 except (ValueError, TypeError):
                     pass
 
@@ -1149,6 +1111,12 @@ class TradingApp(App):
         quote_symbol = str(self.query_one("#trade_quote_select").value)
         quote_address = self.app_config.QUOTE_TOKENS.get(quote_symbol, "")
         
+        # === ОТЛАДКА ===
+        await log.debug(f"[SWITCH_TOKEN] token={token_address[:16]}... | quote_symbol={quote_symbol} | quote_address={quote_address[:16] if quote_address else 'NONE'}...")
+        await log.debug(f"[SWITCH_TOKEN] v2_factory={self.app_config.V2_FACTORY_ADDRESS}")
+        await log.debug(f"[SWITCH_TOKEN] rpc_url={self.app_config.RPC_URL[:50]}...")
+        # ===============
+        
         # Сохраняем quote для фильтрации
         self._current_quote_address = quote_address.lower() if quote_address else None
 
@@ -1418,17 +1386,37 @@ class TradingApp(App):
                 return self.notify("Сумма 0 или ошибка расчета.", severity="error", timeout=5)
             
             # === ПРОВЕРКА БАЛАНСА QUOTE ТОКЕНА ===
+                        # === ПРОВЕРКА БАЛАНСА QUOTE ТОКЕНА ===
             quote_address_lower = quote_address.lower()
             total_quote_balance = 0.0
             for w_addr in wallets_to_trade:
                 total_quote_balance += self._balance_cache.get(w_addr.lower(), {}).get(quote_address_lower, 0.0)
             
             if final_amount > total_quote_balance:
-                return self.notify(
-                    f"Недостаточно {quote_symbol}: нужно {final_amount:.6f}, есть {total_quote_balance:.6f}",
-                    severity="error",
-                    timeout=5
-                )
+                err_msg = f"Недостаточно {quote_symbol}: нужно {final_amount:.6f}, есть {total_quote_balance:.6f}"
+                await log.error(err_msg)
+                return self.notify(err_msg, severity="error", timeout=5
+            )
+            
+            # === ПРОВЕРКА НАТИВНОЙ ВАЛЮТЫ ДЛЯ ГАЗА ===
+            native_address = self.app_config.NATIVE_CURRENCY_ADDRESS.lower()
+            native_symbol = self.app_config.NATIVE_CURRENCY_SYMBOL
+            min_gas = self.app_config.MIN_NATIVE_FOR_GAS
+            
+            for w_addr in wallets_to_trade:
+                native_bal = self._balance_cache.get(w_addr.lower(), {}).get(native_address, 0.0)
+                if native_bal < min_gas:
+                    await log.error(
+                        f"<red>[BUY BLOCKED]</red> Недостаточно {native_symbol} для газа на кошельке "
+                        f"{self._short_wallet(w_addr)}: {native_bal:.6f} < {min_gas}"
+                    )
+                    return self.notify(
+                        f"❌ Недостаточно {native_symbol} для газа!\n"
+                        f"Кошелек: {self._short_wallet(w_addr)}\n"
+                        f"Баланс: {native_bal:.6f}, нужно: {min_gas}",
+                        severity="error",
+                        timeout=8
+                    )
 
         await log.info(f"TUI: START TRADE -> {self._active_trade_mode} {final_amount:.6f} {display_symbol}")
 
