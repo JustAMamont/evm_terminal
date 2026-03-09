@@ -1,86 +1,86 @@
 # 📑 TaxRouter: Smart Contract Overview
 
-Исходный код смарт-контракта **TaxRouter** для выполнения торговых операций в EVM-совместимых сетях через **EVM_TERMINAL**.
+Source code of the **TaxRouter** smart contract for executing trading operations in EVM-compatible networks via **EVM_TERMINAL**.
 
-## 📌 Назначение
+## 📌 Purpose
 
-**TaxRouter** — кастомный роутер-прослойка, агрегирующий ликвидность протоколов V2 и V3 (PancakeSwap-style).
+**TaxRouter** — a custom router middleware aggregating liquidity from V2 and V3 protocols (PancakeSwap-style).
 
-### Возможности:
-- **Унифицированный интерфейс** — сделки в V2/V3 пулах через один контракт
-- **Комиссия 0.1%** — автоматическое удержание 10 BPS с каждой сделки
-- **Quote-токены** — комиссия только в ликвидных активах (USDT, WBNB), без "щиткоинов"
-- **Fee-on-Transfer** — корректная работа с дефляционными токенами
-- **Auto-Fuel** — функции для обмена нативных монет на токены
+### Features:
+- **Unified interface** — trades in V2/V3 pools through a single contract
+- **0.1% fee** — automatic 10 BPS deduction on each trade
+- **Quote tokens** — fee only in liquid assets (USDT, WBNB), no "shitcoins"
+- **Fee-on-Transfer** — correct handling of deflationary tokens
+- **Auto-Fuel** — functions for swapping native coins to tokens
 
 ---
 
-## ⚙️ Спецификации компиляции
+## ⚙️ Compilation Specifications
 
-| Параметр | Значение |
-|----------|----------|
-| Язык | Solidity |
-| Версия | `0.8.33` |
+| Parameter | Value |
+|-----------|-------|
+| Language | Solidity |
+| Version | `0.8.33` |
 | EVM Version | `Shanghai` |
-| Оптимизация | `Enabled` (200 runs) |
-| Лицензия | `MIT` |
+| Optimization | `Enabled` (200 runs) |
+| License | `MIT` |
 
 ---
 
-## 🚀 Деплой
+## 🚀 Deployment
 
-### Аргументы конструктора (BSC Mainnet):
+### Constructor Arguments (BSC Mainnet):
 
 ```
 _factory:     0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73 (V2 Factory)
 _WETH:        0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c (WBNB)
-_feeReceiver: <ВАШ_АДРЕС_ДЛЯ_КОМИССИЙ>
+_feeReceiver: <YOUR_ADDRESS_FOR_FEES>
 _v3Router:    0x1b81D678ffb9C0263b24A97847620C99d213eB14 (V3 Smart Router)
 ```
 
-### После деплоя:
+### After Deployment:
 
-1. **Верифицируйте** контракт в эксплорере
-2. **Добавьте Quote токены** через `setQuoteToken()`:
+1. **Verify** the contract in the explorer
+2. **Add Quote tokens** via `setQuoteToken()`:
    ```
    USDT: 0x55d398326f99059fF775485246999027B3197955
    USDC: 0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d
    ```
-   WBNB добавляется автоматически.
+   WBNB is added automatically.
 
-3. **Внесите адрес** в конфиг сети `networks/bsc.json`:
+3. **Enter the address** in the network config `networks/bsc.json`:
    ```json
-   "dex_router_address": "0xВАШ_АДРЕС_КОНТРАКТА"
+   "dex_router_address": "0xYOUR_CONTRACT_ADDRESS"
    ```
 
 ---
 
-## 🛠 Admin-функции
+## 🛠 Admin Functions
 
-| Функция | Описание |
-|---------|----------|
-| `setFeeReceiver(address)` | Смена адреса для комиссий |
-| `setQuoteToken(address, bool)` | Добавить/удалить Quote-токен |
-| `transferOwnership(address)` | Передача прав владения |
-| `rescueTokens(address, uint)` | Вывод застрявших токенов/BNB |
-
----
-
-## 🔍 Логика комиссии
-
-**Buy:** Принимает Quote-токен → вычитает 0.1% → отправляет в пул → пользователь получает токен
-
-**Sell:** Обменивает токен на Quote → вычитает 0.1% из результата → отправляет пользователю
-
-`amountOutMin` проверяется **после** вычета комиссии — это предотвращает reverts.
+| Function | Description |
+|----------|-------------|
+| `setFeeReceiver(address)` | Change fee recipient address |
+| `setQuoteToken(address, bool)` | Add/remove Quote token |
+| `transferOwnership(address)` | Transfer ownership rights |
+| `rescueTokens(address, uint)` | Withdraw stuck tokens/BNB |
 
 ---
 
-## ⚠️ Важно
+## 🔍 Fee Logic
 
-### Конфигурация адреса
+**Buy:** Accepts Quote token → deducts 0.1% → sends to pool → user receives token
 
-Адрес контракта настраивается в `networks/<network>.json`:
+**Sell:** Exchanges token for Quote → deducts 0.1% from result → sends to user
+
+`amountOutMin` is checked **after** fee deduction — this prevents reverts.
+
+---
+
+## ⚠️ Important
+
+### Address Configuration
+
+Contract address is configured in `networks/<network>.json`:
 
 ```json
 {
@@ -89,26 +89,26 @@ _v3Router:    0x1b81D678ffb9C0263b24A97847620C99d213eB14 (V3 Smart Router)
 }
 ```
 
-### Модификация контракта
+### Contract Modification
 
-Вы можете изменить или убрать комиссию:
+You can modify or remove the fee:
 ```solidity
-uint public constant FEE_BASIS_POINTS = 0;  // Без комиссии
+uint public constant FEE_BASIS_POINTS = 0;  // No fee
 ```
 
-**Важно:** Не меняйте наименования функций и структуру параметров — бот использует специфичный интерфейс.
+**Important:** Do not change function names and parameter structure — the bot uses a specific interface.
 
-### Интеграция с ботом
+### Bot Integration
 
-1. Задеплойте контракт (Remix/Hardhat/Foundry)
-2. Настройте Quote-токены
-3. Впишите адрес в `networks/*.json`
-4. Запустите бот — он подхватит конфиг автоматически
+1. Deploy contract (Remix/Hardhat/Foundry)
+2. Configure Quote tokens
+3. Enter address in `networks/*.json`
+4. Run the bot — it will pick up config automatically
 
 ---
 
 ## Disclaimer
 
-Код предоставлен «как есть». Автор не несёт ответственности за финансовые потери. Ошибки при деплое, неверные адреса роутеров или некорректная настройка могут привести к потере средств.
+The code is provided "as is". The author is not responsible for financial losses. Deployment errors, incorrect router addresses, or improper configuration can result in loss of funds.
 
-**Рекомендация:** Перед Mainnet протестируйте на BSC Testnet. Конфиг тестнета: `networks/bsc_testnet.json`.
+**Recommendation:** Before Mainnet, test on BSC Testnet. Testnet config: `networks/bsc_testnet.json`.

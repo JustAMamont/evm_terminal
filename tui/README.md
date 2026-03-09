@@ -1,10 +1,10 @@
 # TUI Module — Textual Interface
 
-Текстовый интерфейс терминала на базе **Textual**. Event-driven архитектура с реактивным обновлением UI.
+Terminal text interface based on **Textual**. Event-driven architecture with reactive UI updates.
 
 ---
 
-## Архитектура
+## Architecture
 
 ```
 +-----------------------------------------------------------+
@@ -38,18 +38,18 @@
 
 ---
 
-## Компоненты
+## Components
 
-### Статус-бар
+### Status Bar
 
-| Widget | Описание | Обновление |
-|--------|----------|------------|
-| `StatusRPC` | Статус RPC ноды | `_evt_rpc_status`, `_evt_engine_ready` |
-| `StatusConnection` | WebSocket статус | `_evt_connection_status` |
-| `StatusGas` | Текущая цена газа | `_evt_gas_price` |
-| `StatusWallets` | Наличие активных кошельков | `ui_updater_worker` |
+| Widget | Description | Update |
+|--------|-------------|--------|
+| `StatusRPC` | RPC node status | `_evt_rpc_status`, `_evt_engine_ready` |
+| `StatusConnection` | WebSocket status | `_evt_connection_status` |
+| `StatusGas` | Current gas price | `_evt_gas_price` |
+| `StatusWallets` | Active wallets presence | `ui_updater_worker` |
 
-### Вкладки
+### Tabs
 
 ```
 trade_tab     --> Token input, amount, BUY/SELL panels, market data
@@ -63,7 +63,7 @@ help_tab      --> Markdown help
 
 ## Event Dispatcher
 
-События от Rust ядра обрабатываются через словарь `_rust_event_handlers`:
+Events from the Rust core are processed via the `_rust_event_handlers` dictionary:
 
 ```python
 _rust_event_handlers = {
@@ -86,7 +86,7 @@ _rust_event_handlers = {
 }
 ```
 
-### Цепочка обработки
+### Processing Chain
 
 ```
 Rust Event -> _rust_event_listener() -> handle_rust_event()
@@ -100,7 +100,7 @@ Rust Event -> _rust_event_listener() -> handle_rust_event()
 
 ---
 
-## Состояние UI
+## UI State
 
 ### `_market_data`
 
@@ -110,11 +110,11 @@ Rust Event -> _rust_event_listener() -> handle_rust_event()
     'pool_address': str,
     'tvl_usd': float,
     'fee_bps': int,
-    'impact_buy': float,     # Price impact для покупки
-    'impact_sell': float,    # Price impact для продажи
+    'impact_buy': float,     # Price impact for buy
+    'impact_sell': float,    # Price impact for sell
     'current_price': float,
-    'pos_cost_quote': float, # Стоимость позиции в quote
-    'pos_amount': float,     # Количество токенов в позиции
+    'pos_cost_quote': float, # Position cost in quote
+    'pos_amount': float,     # Token amount in position
     'token_symbol': str
 }
 ```
@@ -133,21 +133,21 @@ Rust Event -> _rust_event_listener() -> handle_rust_event()
 
 ---
 
-## Горячие клавиши
+## Hotkeys
 
-| Binding | Action | Описание |
-|---------|--------|----------|
-| `Ctrl+Q` | `quit` | Выход |
-| `Ctrl+R` | `reload_wallets` | Ресинк балансов |
-| `T` | `switch_tab('trade_tab')` | Вкладка торговли |
-| `W` | `switch_tab('wallets_tab')` | Вкладка кошельков |
-| `S` | `switch_tab('settings_tab')` | Вкладка настроек |
-| `L` | `switch_tab('logs_tab')` | Вкладка логов |
-| `F` | `switch_tab('help_tab')` | Справка |
-| `↑` | `set_trade_mode('BUY')` | Режим покупки |
-| `↓` | `set_trade_mode('SELL')` | Режим продажи |
-| `Enter` | `execute_trade` | Исполнить ордер |
-| `Delete` | `clear_token_input` | Очистить токен |
+| Binding | Action | Description |
+|---------|--------|-------------|
+| `Ctrl+Q` | `quit` | Exit |
+| `Ctrl+R` | `reload_wallets` | Resync balances |
+| `T` | `switch_tab('trade_tab')` | Trade tab |
+| `W` | `switch_tab('wallets_tab')` | Wallets tab |
+| `S` | `switch_tab('settings_tab')` | Settings tab |
+| `L` | `switch_tab('logs_tab')` | Logs tab |
+| `F` | `switch_tab('help_tab')` | Help |
+| `↑` | `set_trade_mode('BUY')` | Buy mode |
+| `↓` | `set_trade_mode('SELL')` | Sell mode |
+| `Enter` | `execute_trade` | Execute order |
+| `Delete` | `clear_token_input` | Clear token |
 | `Shift+↑` | `change_slippage(+0.5)` | +0.5% slippage |
 | `Shift+↓` | `change_slippage(-0.5)` | -0.5% slippage |
 | `Shift+→` | `change_gas(+0.1)` | +0.1 Gwei |
@@ -155,22 +155,22 @@ Rust Event -> _rust_event_listener() -> handle_rust_event()
 
 ---
 
-## Фоновые задачи
+## Background Tasks
 
-При `on_mount` запускаются:
+On `on_mount`, the following start:
 
 ```python
 _background_tasks = [
-    ui_updater_worker(),       # Обработка ui_update_queue
-    _rust_event_listener(),    # Чтение событий из bridge
-    status_update_loop(),      # Периодическое обновление статуса
-    _notification_watcher()    # Обработка notification_queue
+    ui_updater_worker(),       # Process ui_update_queue
+    _rust_event_listener(),    # Read events from bridge
+    status_update_loop(),      # Periodic status updates
+    _notification_watcher()    # Process notification_queue
 ]
 ```
 
 ### `ui_update_queue`
 
-Типы обновлений:
+Update types:
 - `"refresh_balances"` → `_refresh_wallet_table()`
 - `"refresh_all"` → `_load_and_apply_settings()` + `_refresh_wallet_table()`
 - `"refresh_market_data"` → `_update_market_data_table()`
@@ -178,7 +178,7 @@ _background_tasks = [
 
 ---
 
-## Торговля
+## Trading
 
 ### BUY Flow
 
@@ -225,13 +225,13 @@ action_execute_trade()
 
 ## TxStatusTracker
 
-Отслеживание транзакций с измерением latency:
+Transaction tracking with latency measurement:
 
 ```python
 class TxStatusTracker:
     _pending_txs: Dict[str, Dict]  # tx_hash → tx_info
     _positions: Dict[str, List]    # "wallet:token" → [{amount, tx_hash, ...}]
-    
+
     record_tx_sent(tx_hash, wallet, action, amount, token) → send_time
     confirm_tx(tx_hash, gas_used, status) → result with latency_ms
     get_position(wallet, token) → List[Dict]
@@ -240,39 +240,40 @@ class TxStatusTracker:
 
 ---
 
-## Интеграция с Cache
+## Cache Integration
 
-| Метод Cache | Использование |
-|-------------|---------------|
-| `get_all_wallets()` | Загрузка в `wallets_cache_ui` |
-| `get_position_memory()` | PnL расчет |
-| `update_position_memory()` | При BUY |
-| `close_position_memory()` | При SELL success |
-| `get_exact_balance_wei()` | Количество токенов для SELL |
-| `set_exact_balance_wei()` | При BalanceUpdate |
-| `get_active_trade_token()` | Текущий токен |
-| `set_active_trade_token()` | При вводе адреса |
+| Cache Method | Usage |
+|--------------|-------|
+| `get_all_wallets()` | Load into `wallets_cache_ui` |
+| `get_position_memory()` | PnL calculation |
+| `update_position_memory()` | On BUY |
+| `close_position_memory()` | On SELL success |
+| `get_exact_balance_wei()` | Token amount for SELL |
+| `set_exact_balance_wei()` | On BalanceUpdate |
+| `get_active_trade_token()` | Current token |
+| `set_active_trade_token()` | On address input |
 
 ---
 
 ## CSS Classes
 
-Файл: `app.css`
+File: `app.css`
 
-Ключевые классы:
-- `.active-panel` — подсветка активной панели BUY/SELL
-- `.button-pressed` — анимация нажатия кнопки
-- `.label-row` — строка с лейблом и значением
-- `.settings-group` — группа настроек
-- `.input-row` — строка с инпутами
+Key classes:
+- `.active-panel` — highlight active BUY/SELL panel
+- `.button-pressed` — button press animation
+- `.label-row` — row with label and value
+- `.settings-group` — settings group
+- `.input-row` — row with inputs
 
 ---
 
-## Валидаторы
+## Validators
 
-| Validator | Поле | Правила |
-|-----------|------|---------|
-| `AmountValidator` | `#amount_input` | Число > 0 или процент 1-100% |
-| `FloatValidator` | Gas, Slippage | Число > 0 |
-| `IntegerValidator` | Gas Limit | Целое > 0 |
+| Validator | Field | Rules |
+|-----------|-------|-------|
+| `AmountValidator` | `#amount_input` | Number > 0 or percentage 1-100% |
+| `FloatValidator` | Gas, Slippage | Number > 0 |
+| `IntegerValidator` | Gas Limit | Integer > 0 |
 | `AddressValidator` | `#token_input` | `0x[a-fA-F0-9]{40}` |
+

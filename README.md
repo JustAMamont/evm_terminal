@@ -1,27 +1,33 @@
 # EVM_TERMINAL 🚀
 
-![Демонстрация работы терминала](media/term_preview.gif)
+![Terminal Demo](media/term_preview.gif)
 
-Высокоскоростной торговый терминал (TUI) для DEX. Гибрид Python + Rust.
+High-speed trading terminal (TUI) for DEX. Python + Rust hybrid.
 
-> **Важно:** Бот архитектурно поддерживает любые EVM-совместимые сети. На данный момент реализована и протестирована только **BSC (Binance Smart Chain)**. Добавление новых сетей — см. [networks/README.md](networks/README.md).
+> **Important:** The bot is architecturally designed to support any EVM-compatible networks. Currently, only **BSC (Binance Smart Chain)** is implemented and tested. Adding new networks — see [networks/README.md](networks/README.md).
 
 ---
 
-## Содержание
+## Tags
 
-- [Архитектура](#архитектура)
-- [Требования](#требования)
-- [Сборка](#сборка)
-- [Использование](#использование)
-- [Горячие клавиши](#горячие-клавиши)
+`dex` `trading-terminal` `evm` `bsc` `binance-smart-chain` `defi` `tui` `rust` `python` `cryptocurrency` `trading-bot` `websocket` `real-time` `swap` `pancakeswap` `uniswap`
+
+---
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Build](#build)
+- [Usage](#usage)
+- [Hotkeys](#hotkeys)
 - [TaxRouter](#taxrouter)
-- [Безопасность](#безопасность)
+- [Security](#security)
 - [Legacy Context](#legacy-context)
 
 ---
 
-## Архитектура
+## Architecture
 
 ```
 +----------------------- PYTHON LAYER ------------------------+
@@ -60,7 +66,7 @@
                      RPC / WSS
 ```
 
-### Поток данных
+### Data Flow
 
 ```
 User presses "BUY"
@@ -102,26 +108,26 @@ TUI: UI Update
 
 ---
 
-## Требования
+## Requirements
 
-### Зависимости
+### Dependencies
 - Python 3.12+
 - Rust (stable) + maturin
 - Linux: `build-essential python3-dev libssl-dev`
 - Windows: VS Build Tools 2022 (C++ workload)
 
-### Сеть
-- VPS во Франкфурте/Лондоне (пинг к BSC nodes)
-- Интернет-канал в 50+ Мбит/с
+### Network
+- VPS in Frankfurt/London (ping to BSC nodes)
+- 50+ Mbit/s internet connection
 
 ### Windows
-- **Обязательно:** [Windows Terminal](https://apps.microsoft.com/store/detail/windows-terminal/9N0DX20HK701)
-- Установить как терминал по умолчанию
-- `cmd.exe` и PowerShell (legacy) сломают рендеринг и хоткеи
+- **Required:** [Windows Terminal](https://apps.microsoft.com/store/detail/windows-terminal/9N0DX20HK701)
+- Set as default terminal
+- `cmd.exe` and PowerShell (legacy) will break rendering and hotkeys
 
 ---
 
-## Сборка
+## Build
 
 ```bash
 git clone https://github.com/JustAMamont/evm_terminal
@@ -141,125 +147,125 @@ python main.py
 
 ---
 
-## Использование
+## Usage
 
-### Первичная настройка
+### Initial Setup
 
-1. **Мастер-пароль** — при первом запуске создайте пароль для шифрования ключей
-2. **Кошельки** — добавьте приватные ключи в вкладке Wallets
-3. **RPC** — для BSC Mainnet публичные RPC работают из коробки
-4. **Quote-валюта** — выберите WBNB/USDT/USDC в Settings
+1. **Master password** — create a password for key encryption on first run
+2. **Wallets** — add private keys in the Wallets tab
+3. **RPC** — for BSC Mainnet, public RPCs work out of the box
+4. **Quote currency** — select WBNB/USDT/USDC in Settings
 
 ### Testnet (BSC Testnet)
 
-⚠️ **Важно:** BSC Testnet требует приватный RPC!
+⚠️ **Important:** BSC Testnet requires private RPC!
 
-Публичные RPC BSC Testnet не поддерживают WebSocket. Перед работой:
-1. Получите приватный endpoint (Chainstack, QuickNode, Alchemy)
-2. Вставьте HTTP endpoint в **Settings → RPC URL**
-3. Приложение перезапустится
+BSC Testnet public RPCs do not support WebSocket. Before use:
+1. Get a private endpoint (Chainstack, QuickNode, Alchemy)
+2. Insert HTTP endpoint into **Settings → RPC URL**
+3. Application will restart
 
-### Торговля
+### Trading
 
-**Покупка (BUY):**
-1. Вставьте адрес токена (`Ctrl+Shift+V`)
-2. Введите сумму или процент (например `0.1` или `50%`)
-3. Нажмите **КУПИТЬ** или `Enter`
+**Buy:**
+1. Paste token address (`Ctrl+Shift+V`)
+2. Enter amount or percentage (e.g., `0.1` or `50%`)
+3. Press **BUY** or `Enter`
 
-**Продажа (SELL):**
-1. Выберите токен (вставьте адрес)
-2. Нажмите `↓` для переключения в режим SELL
-3. Нажмите **ПРОДАТЬ** — продаётся 100% баланса токена
+**Sell:**
+1. Select token (paste address)
+2. Press `↓` to switch to SELL mode
+3. Press **SELL** — sells 100% of token balance
 
 ---
 
-## Горячие клавиши
+## Hotkeys
 
-### Навигация
+### Navigation
 
-| Клавиша | Действие |
-|---------|----------|
-| `T` | Вкладка Торговля |
-| `W` | Вкладка Кошельки |
-| `S` | Вкладка Настройки |
-| `L` | Вкладка Логи |
-| `F` | Помощь |
-| `Ctrl+Q` | Выход |
+| Key | Action |
+|-----|--------|
+| `T` | Trade Tab |
+| `W` | Wallets Tab |
+| `S` | Settings Tab |
+| `L` | Logs Tab |
+| `F` | Help |
+| `Ctrl+Q` | Exit |
 
-### Торговля
+### Trading
 
-| Клавиша | Действие |
-|---------|----------|
-| `↑` / `↓` | Смена режима BUY / SELL |
-| `Enter` | Выполнить операцию |
-| `Ctrl+R` | Обновить данные |
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Switch BUY / SELL mode |
+| `Enter` | Execute operation |
+| `Ctrl+R` | Refresh data |
 
-### Вставка текста
+### Paste
 
-| Клавиша | Действие |
-|---------|----------|
-| `Ctrl+Shift+V` | Вставить из буфера обмена |
-| `Ctrl+V` | **Не работает** в TUI |
+| Key | Action |
+|-----|--------|
+| `Ctrl+Shift+V` | Paste from clipboard |
+| `Ctrl+V` | **Does not work** in TUI |
 
-> ⚠️ **Важно:** Обычный `Ctrl+V` в терминальных приложениях не работает. Всегда используйте `Ctrl+Shift+V` для вставки адресов, ключей и других данных.
+> ⚠️ **Important:** Standard `Ctrl+V` does not work in terminal applications. Always use `Ctrl+Shift+V` for pasting addresses, keys, and other data.
 
 ---
 
 ## TaxRouter
 
-Смарт-контракт для маршрутизации V2/V3 с комиссией.
+Smart contract for V2/V3 routing with fee.
 
-**Адрес (BSC Mainnet):** `0xcdcc4feee010fcd5301fd823085e3d3e7d414a46`
+**Address (BSC Mainnet):** `0xcdcc4feee010fcd5301fd823085e3d3e7d414a46`
 
-| Операция | Комиссия |
-|----------|----------|
-| Buy | 0.1% вычитается из входящей суммы |
-| Sell | 0.1% вычитается из полученной суммы |
+| Operation | Fee |
+|-----------|-----|
+| Buy | 0.1% deducted from input amount |
+| Sell | 0.1% deducted from output amount |
 
-📖 **Инструкция по деплою и настройке:** см. [contract/README.md](contract/README.md)
+📖 **Deployment and configuration instructions:** see [contract/README.md](contract/README.md)
 
 ---
 
-## Безопасность
+## Security
 
-- AES-256-GCM шифрование приватных ключей
-- PBKDF2-HMAC-SHA256 (480K итераций)
-- Rust isolation для криптографии
-- Нет бэкендов — работает автономно
+- AES-256-GCM encryption for private keys
+- PBKDF2-HMAC-SHA256 (480K iterations)
+- Rust isolation for cryptography
+- No backends — operates autonomously
 
 ---
 
 ## Legacy Context
 
-Изначально **EVM_TERMINAL** разрабатывался как коммерческий B2C продукт для русскоязычного крипто-комьюнити.
+Originally **EVM_TERMINAL** was developed as a commercial B2C product for the Russian-speaking crypto community.
 
-**Бизнес-модель:** Монетизация через фиксированную комиссию **0.1%** с каждой транзакции, проходящей через кастомный `TaxRouter`.
+**Business model:** Monetization through a fixed **0.1%** fee on each transaction processed through the custom `TaxRouter`.
 
-**Централизованная инфраструктура (удалена):**
-- Сбор телеметрии и торговой статистики
-- Система OTA-обновлений бинарных файлов
-- Лицензирование с привязкой к HWID
+**Centralized infrastructure (removed):**
+- Telemetry and trading statistics collection
+- OTA update system for binaries
+- Licensing with HWID binding
 
-**Почему проект закрылся:** Из-за архитектурных ограничений клиентского приложения — нестабильная работа на домашних устройствах пользователей (высокий пинг, нестабильный интернет). Для достижения детерминированного поведения логики терминала по идее требуются приватные MEV-роутеры (bloXroute, Flashbots) или собственная нода — недоступные большинству ритейл-трейдеров ресурсы.
+**Why the project shut down:** Due to architectural limitations of the client application — unstable operation on users' home devices (high ping, unstable internet). Achieving deterministic terminal logic behavior would require private MEV routers (bloXroute, Flashbots) or a personal node — resources unavailable to most retail traders.
 
-**Текущий статус:** Вся централизованная логика **полностью вырезана**. Код очищен от запросов к управляющим серверам. Терминал работает автономно. При хорошем пинге до нод (VPS в регионе дата-центров) программа демонстрирует стабильную и надёжную работу.
+**Current status:** All centralized logic has been **completely removed**. Code is cleaned of requests to controlling servers. Terminal operates autonomously. With good ping to nodes (VPS in data center regions), the program demonstrates stable and reliable operation.
 
-**Почему build.py такой замысловатый:** Скрипт содержит механизмы обфускации (компиляция в байт-код, `marshal`, `base64`, Cython) — технический атавизм коммерческой версии для защиты от реверс-инжиниринга. Сохранён как демонстрация подхода к сборке self-contained приложений.
+**Why build.py is so elaborate:** The script contains obfuscation mechanisms (`base64`, Cython) — a technical remnant of the commercial version for protection against reverse engineering. Preserved as a demonstration of self-contained application assembly approach.
 
 ---
 
-## 📁 Документация
+## 📁 Documentation
 
-| Раздел | Файл |
-|--------|------|
-| Конфигурация сетей | [networks/README.md](networks/README.md) |
-| Деплой контрактов | [contract/README.md](contract/README.md) |
+| Section | File |
+|---------|------|
+| Network Configuration | [networks/README.md](networks/README.md) |
+| Contract Deployment | [contract/README.md](contract/README.md) |
 
 ---
 
 ## Disclaimer
 
-AS IS. Автор не несёт ответственности за финансовые потери. Комиссия 0.1% за каждую транзакцию через TaxRouter — неотъемлемая часть логики бота. Можете свободно разворачивать/редактировать контракт под свои нужды.
+AS IS. Author is not responsible for financial losses. The 0.1% fee for each transaction through TaxRouter is an integral part of the bot's logic. You are free to deploy/edit the contract for your needs.
 
 ---
 

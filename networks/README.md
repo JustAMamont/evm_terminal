@@ -1,15 +1,15 @@
-# 📁 Конфигурация сетей (networks/)
+# 📁 Network Configuration (networks/)
 
-Папка содержит JSON-файлы конфигурации для каждой поддерживаемой EVM-сети.
+This folder contains JSON configuration files for each supported EVM network.
 
-Имя файла = идентификатор сети (например `bsc.json`, `eth.json`, `polygon.json`).
+Filename = network identifier (e.g., `bsc.json`, `eth.json`, `polygon.json`).
 
-**Предупреждение:** 
-> Пока проверена и отлажена работа только с `BSC (mainnet, testnet)`, остальные теоретически должны работать без проблем, так как контракты роутеров, квотеров унифицированы для всех EVM-сетей (опять же теоретически). `Потому вся инфа ниже что не касается BNB нуждается в проверках`. Файл сгенерерирован с помощью нейросети и будет со временем дополняться и редактироваться.
+**Warning:**
+> Only `BSC (mainnet, testnet)` has been tested and debugged so far. Others should theoretically work without issues, as router and quoter contracts are unified for all EVM networks (again, theoretically). `Therefore, all information below not related to BNB requires verification`.
 
 ---
 
-## Структура конфига
+## Config Structure
 
 ```json
 {
@@ -37,87 +37,87 @@
 
 ---
 
-## Параметры
+## Parameters
 
-### Основные
+### Basic
 
-| Параметр | Тип | Описание |
-|----------|-----|----------|
-| `name` | string | Отображаемое имя сети в интерфейсе |
-| `db_path` | string | Путь к файлу БД для данной сети |
-| `chain_id` | number | Chain ID сети |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | Display name of network in interface |
+| `db_path` | string | Path to database file for this network |
+| `chain_id` | number | Chain ID of the network |
 
-### RPC endpoints
+### RPC Endpoints
 
-| Параметр | Тип | Обязательный | Описание |
-|----------|-----|--------------|----------|
-| `rpc_url` | string | Да | HTTP RPC endpoint (fallback из JSON) |
-| `wss_url` | string | Нет | WebSocket endpoint. Если пусто — генерируется из `rpc_url` |
-| `public_rpc_urls` | array | Да | Список публичных RPC для распределения нагрузки |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `rpc_url` | string | Yes | HTTP RPC endpoint (fallback from JSON) |
+| `wss_url` | string | No | WebSocket endpoint. If empty — generated from `rpc_url` |
+| `public_rpc_urls` | array | Yes | List of public RPCs for load distribution |
 
-### Нативная валюта
+### Native Currency
 
-| Параметр | Тип | Описание |
-|----------|-----|----------|
-| `native_currency_symbol` | string | Символ нативной валюты (BNB, ETH, MATIC, ARB) |
-| `native_currency_address` | string | Адрес нативной валюты (обычно `0xee...ee`) |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `native_currency_symbol` | string | Native currency symbol (BNB, ETH, MATIC, ARB) |
+| `native_currency_address` | string | Native currency address (usually `0xee...ee`) |
 
-### DEX контракты
+### DEX Contracts
 
-| Параметр | Тип | Обязательный | Описание |
-|----------|-----|--------------|----------|
-| `dex_router_address` | string | Да | Адрес нашего TaxRouter контракта |
-| `v2_factory_address` | string | Рекомендуется | Factory V2 для поиска пулов |
-| `v3_factory_address` | string | Рекомендуется | Factory V3 для поиска пулов |
-| `v2_router_address` | string | Рекомендуется | Router V2 для свапов |
-| `v3_quoter_address` | string | Рекомендуется | Quoter V3 для получения цен |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `dex_router_address` | string | Yes | Our TaxRouter contract address |
+| `v2_factory_address` | string | Recommended | V2 Factory for pool discovery |
+| `v3_factory_address` | string | Recommended | V3 Factory for pool discovery |
+| `v2_router_address` | string | Recommended | V2 Router for swaps |
+| `v3_quoter_address` | string | Recommended | V3 Quoter for price fetching |
 
-### Прочее
+### Other
 
-| Параметр | Тип | Описание |
-|----------|-----|----------|
-| `explorer_url` | string | URL блокчейн-эксплорера |
-| `fee_receiver` | string | Адрес получателя комиссий проекта |
-| `default_quote_currency` | string | Quote-валюта по умолчанию (должна быть в `quote_tokens`) |
-| `quote_tokens` | object | Словарь quote-токенов {symbol: address} |
-| `min_native_for_gas` | number | Минимум нативной валюты для предупреждения |
-| `requires_private_rpc` | boolean | Требуется ли приватный RPC от пользователя |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `explorer_url` | string | Blockchain explorer URL |
+| `fee_receiver` | string | Project fee recipient address |
+| `default_quote_currency` | string | Default quote currency (must be in `quote_tokens`) |
+| `quote_tokens` | object | Dictionary of quote tokens {symbol: address} |
+| `min_native_for_gas` | number | Minimum native currency for warning |
+| `requires_private_rpc` | boolean | Whether private RPC from user is required |
 
 ---
 
-## Поддерживаемые сети
+## Supported Networks
 
 ### BSC (Binance Smart Chain)
 
-| Сеть | Chain ID | Файл |
-|------|----------|------|
+| Network | Chain ID | File |
+|---------|----------|------|
 | BSC Mainnet | 56 | `bsc.json` |
 | BSC Testnet | 97 | `bsc_testnet.json` |
 
 ### Ethereum
 
-| Сеть | Chain ID | Файл |
-|------|----------|------|
+| Network | Chain ID | File |
+|---------|----------|------|
 | Ethereum Mainnet | 1 | `eth.json` |
 | Sepolia Testnet | 11155111 | `eth_sepolia.json` |
 
 ### Polygon
 
-| Сеть | Chain ID | Файл |
-|------|----------|------|
+| Network | Chain ID | File |
+|---------|----------|------|
 | Polygon Mainnet | 137 | `polygon.json` |
 | Mumbai Testnet | 80001 | `polygon_mumbai.json` |
 
 ### Arbitrum
 
-| Сеть | Chain ID | Файл |
-|------|----------|------|
+| Network | Chain ID | File |
+|---------|----------|------|
 | Arbitrum One | 42161 | `arbitrum.json` |
 | Arbitrum Sepolia | 421614 | `arbitrum_sepolia.json` |
 
 ---
 
-## Примеры конфигураций
+## Configuration Examples
 
 ### BSC Mainnet
 
@@ -153,7 +153,7 @@
 
 ---
 
-### BSC Testnet (требует приватный RPC)
+### BSC Testnet (requires private RPC)
 
 ```json
 {
@@ -185,13 +185,13 @@
 }
 ```
 
-**Ключевые отличия:**
-- `requires_private_rpc: true` — пользователь обязан ввести приватный RPC
-- `wss_url: ""` — публичный WebSocket недоступен
+**Key differences:**
+- `requires_private_rpc: true` — user must enter a private RPC
+- `wss_url: ""` — public WebSocket unavailable
 
 ---
 
-### Ethereum Mainnet
+### Ethereum Mainnet (unverified)
 
 ```json
 {
@@ -224,14 +224,14 @@
 }
 ```
 
-**Особенности Ethereum:**
-- `requires_private_rpc: true` — публичные RPC ненадёжны
-- `min_native_for_gas: 0.001` — ETH дороже, нужно больше на газ
-- Uniswap V2/V3 контракты
+**Ethereum specifics:**
+- `requires_private_rpc: true` — public RPCs are unreliable
+- `min_native_for_gas: 0.001` — ETH is more expensive, need more for gas
+- Uniswap V2/V3 contracts
 
 ---
 
-### Polygon Mainnet
+### Polygon Mainnet (unverified)
 
 ```json
 {
@@ -266,7 +266,7 @@
 
 ---
 
-### Arbitrum One
+### Arbitrum One (unverified)
 
 ```json
 {
@@ -301,12 +301,12 @@
 
 ---
 
-## DEX контракты по сетям
+## DEX Contracts by Network
 
 ### Uniswap V2 Compatible
 
-| Сеть | Factory | Router |
-|------|---------|--------|
+| Network | Factory | Router |
+|---------|---------|--------|
 | Ethereum | `0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f` | `0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D` |
 | BSC (PancakeSwap) | `0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73` | `0x10ED43C718714eb63d5aA57B78B54704E256024E` |
 | Polygon (QuickSwap) | `0x5757371414417b8C6CAad45bAeF941aBc7d3Ab32` | `0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff` |
@@ -314,8 +314,8 @@
 
 ### Uniswap V3
 
-| Сеть | Factory | Quoter |
-|------|---------|--------|
+| Network | Factory | Quoter |
+|---------|---------|--------|
 | Ethereum | `0x1F98431c8aD98523631AE4a59f267346ea31F984` | `0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6` |
 | BSC (PancakeSwap) | `0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865` | `0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997` |
 | Polygon | `0x1F98431c8aD98523631AE4a59f267346ea31F984` | `0xa1D0832a44073f59F1B2f5E3C2Ae52F8093d193d` |
@@ -323,20 +323,20 @@
 
 ---
 
-## Quote-токены по сетям
+## Quote Tokens by Network
 
 ### Ethereum
 
-| Символ | Адрес | Описание |
-|--------|-------|----------|
+| Symbol | Address | Description |
+|--------|---------|-------------|
 | WETH | `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2` | Wrapped ETH |
 | USDC | `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` | USD Coin |
 | USDT | `0xdAC17F958D2ee523a2206206994597C13D831ec7` | Tether USD |
 
 ### BSC
 
-| Символ | Адрес | Описание |
-|--------|-------|----------|
+| Symbol | Address | Description |
+|--------|---------|-------------|
 | WBNB | `0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c` | Wrapped BNB |
 | USDT | `0x55d398326f99059fF775485246999027B3197955` | Tether USD |
 | USDC | `0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d` | USD Coin |
@@ -346,16 +346,16 @@
 
 ### Polygon
 
-| Символ | Адрес | Описание |
-|--------|-------|----------|
+| Symbol | Address | Description |
+|--------|---------|-------------|
 | WMATIC | `0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270` | Wrapped MATIC |
 | USDC | `0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359` | USD Coin (native) |
 | USDT | `0xc2132D05D31c914a87C6611C10748AEb04B58e8F` | Tether USD |
 
 ### Arbitrum
 
-| Символ | Адрес | Описание |
-|--------|-------|----------|
+| Symbol | Address | Description |
+|--------|---------|-------------|
 | WETH | `0x82aF49447D8a07e3bd95BD0d56f35241523fBab1` | Wrapped ETH |
 | USDC | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` | USD Coin (native) |
 | USDT | `0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9` | Tether USD |
@@ -364,33 +364,33 @@
 
 ## requires_private_rpc
 
-Флаг обязательности приватного RPC от пользователя.
+Flag indicating whether private RPC from user is required.
 
-| Значение | Когда ставить |
-|----------|---------------|
-| `false` | Публичные RPC стабильны и поддерживают WebSocket |
-| `true` | Публичные RPC ненадёжны или не поддерживают WebSocket |
+| Value | When to set |
+|-------|-------------|
+| `false` | Public RPCs are stable and support WebSocket |
+| `true` | Public RPCs are unreliable or don't support WebSocket |
 
-**Рекомендации:**
+**Recommendations:**
 
-| Сеть | requires_private_rpc | Причина |
-|------|---------------------|---------|
-| BSC Mainnet | `false` | Много стабильных публичных RPC |
-| BSC Testnet | `true` | Публичные не поддерживают WSS |
-| Ethereum | `true` | Высокая нагрузка, публичные лимитированы |
-| Polygon | `false` | Хорошие публичные RPC |
-| Arbitrum | `false` | Официальные RPC стабильны |
+| Network | requires_private_rpc | Reason |
+|---------|---------------------|--------|
+| BSC Mainnet | `false` | Many stable public RPCs |
+| BSC Testnet | `true` | Public ones don't support WSS |
+| Ethereum | `true` | High load, public ones are limited |
+| Polygon | `false` | Good public RPCs |
+| Arbitrum | `false` | Official RPCs are stable |
 
 ---
 
 ## min_native_for_gas
 
-Минимальный баланс нативной валюты для предупреждения.
+Minimum native currency balance for warning.
 
-**Рекомендации:**
+**Recommendations:**
 
-| Сеть | Значение | В USD (~) |
-|------|----------|-----------|
+| Network | Value | In USD (~) |
+|---------|-------|------------|
 | BSC | 0.00005 | ~$0.03 |
 | Ethereum | 0.001 | ~$3-5 |
 | Polygon | 0.1 | ~$0.05 |
@@ -398,24 +398,24 @@
 
 ---
 
-## Добавление новой сети
+## Adding a New Network
 
-1. Создайте файл `networks/<network_name>.json`
-2. Заполните все обязательные поля
-3. Найдите адреса DEX контрактов (Factory, Router, Quoter)
-4. Определите quote-токены
-5. Укажите `requires_private_rpc` в зависимости от доступности публичных RPC
-6. Деплойте TaxRouter контракт в новую сеть
-7. Укажите его адрес в `dex_router_address`
+1. Create file `networks/<network_name>.json`
+2. Fill in all required fields
+3. Find DEX contract addresses (Factory, Router, Quoter)
+4. Define quote tokens
+5. Set `requires_private_rpc` based on public RPC availability
+6. Deploy TaxRouter contract to new network
+7. Enter its address in `dex_router_address`
 
 ---
 
-## Провайдеры приватного RPC
+## Private RPC Providers
 
-| Провайдер | Бесплатный тариф | Сети | WebSocket |
-|-----------|------------------|------|-----------|
-| Chainstack | 3M requests/мес | Все основные | ✅ |
-| QuickNode | 10M credits/мес | Все основные | ✅ |
-| Alchemy | 300M compute/мес | ETH, Polygon, Arb | ✅ |
-| Ankr | 10M requests/мес | Все основные | ✅ |
-| Infura | 100k requests/день | ETH, Polygon | ✅ |
+| Provider | Free Tier | Networks | WebSocket |
+|----------|-----------|----------|-----------|
+| Chainstack | 3M requests/month | All major | ✅ |
+| QuickNode | 10M credits/month | All major | ✅ |
+| Alchemy | 300M compute/month | ETH, Polygon, Arb | ✅ |
+| Ankr | 10M requests/month | All major | ✅ |
+| Infura | 100k requests/day | ETH, Polygon | ✅ |

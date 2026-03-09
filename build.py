@@ -7,8 +7,6 @@ from setuptools import setup, Extension
 from Cython.Build import cythonize
 import platform
 from typing import Set, Iterable
-import marshal
-import base64
 import Cython.Compiler.Options
 
 # Запрещаем докстринги компилятору Cython
