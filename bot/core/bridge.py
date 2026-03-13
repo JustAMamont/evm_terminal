@@ -1,8 +1,9 @@
 import asyncio
 import socket
-import orjson
+import struct
 from typing import Optional, Callable, Dict, List
 from dataclasses import dataclass
+
 
 try:
     import dexbot_core
@@ -12,15 +13,122 @@ except ImportError:
     RUST_AVAILABLE = False
 
 
+# ===================== EVENT TYPE REGISTRY =====================
+
+class EventType:
+    """Must match Rust EventType enum"""
+    EngineReady      = 0x0000
+    Log              = 0x0001
+    ConnectionStatus = 0x0002
+    GasPriceUpdate   = 0x0003
+    BalanceUpdate    = 0x0100
+    PoolDetected     = 0x0200
+    PoolUpdate       = 0x0201
+    PoolNotFound     = 0x0202
+    ImpactUpdate     = 0x0203
+    TxSent           = 0x0300
+    TxConfirmed      = 0x0301
+    TradeStatus      = 0x0302
+    AutoFuelError    = 0x0303
+    PnLUpdate        = 0x0400
+
+
+class CommandType:
+    """Must match Rust CommandType enum"""
+    Init                = 0x0000
+    Shutdown            = 0x0001
+    SwitchToken         = 0x0100
+    UnsubscribeToken    = 0x0101
+    ExecuteTrade        = 0x0200
+    CalcImpact          = 0x0201
+    UpdatePrice         = 0x0300
+    UpdateSettings      = 0x0301
+    UpdateTokenDecimals = 0x0302
+    RefreshBalance      = 0x0303
+    AddWallet           = 0x0304
+    RefreshAllBalances  = 0x0305
+
+
+# ===================== PACK HELPERS =====================
+
+def pack_u8(w: bytearray, v: int):
+    w.append(v & 0xFF)
+
+def pack_u16(w: bytearray, v: int):
+    w.extend(struct.pack('<H', v))
+
+def pack_u32(w: bytearray, v: int):
+    w.extend(struct.pack('<I', v))
+
+def pack_u64(w: bytearray, v: int):
+    w.extend(struct.pack('<Q', v))
+
+def pack_f64(w: bytearray, v: float):
+    w.extend(struct.pack('<d', v))
+
+def pack_bool(w: bytearray, v: bool):
+    w.append(1 if v else 0)
+
+def pack_string(w: bytearray, s: str):
+    encoded = s.encode('utf-8')
+    pack_u16(w, len(encoded))
+    w.extend(encoded)
+
+
+# ===================== UNPACK HELPERS =====================
+
+class ByteReader:
+    def __init__(self, data: bytes):
+        self.data = data
+        self.pos = 0
+    
+    def read(self, n: int) -> bytes:
+        if self.pos + n > len(self.data):
+            raise ValueError("Unexpected end of data")
+        result = self.data[self.pos:self.pos + n]
+        self.pos += n
+        return result
+    
+    def u8(self) -> int:
+        return self.read(1)[0]
+    
+    def u16(self) -> int:
+        return struct.unpack('<H', self.read(2))[0]
+    
+    def u32(self) -> int:
+        return struct.unpack('<I', self.read(4))[0]
+    
+    def u64(self) -> int:
+        return struct.unpack('<Q', self.read(8))[0]
+    
+    def f64(self) -> float:
+        return struct.unpack('<d', self.read(8))[0]
+    
+    def bool_(self) -> bool:
+        return self.u8() != 0
+    
+    def string(self) -> str:
+        length = self.u16()
+        return self.read(length).decode('utf-8')
+    
+    def exhausted(self) -> bool:
+        return self.pos >= len(self.data)
+
+
 # ===================== AUTO-FUEL SETTINGS =====================
 
 @dataclass
 class AutoFuelSettings:
-    """Настройки авто-закупки газа"""
     auto_fuel_enabled: bool = False
     auto_fuel_threshold: float = 0.005
     auto_fuel_amount: float = 0.01
     fuel_quote_address: str = ""
+    
+    def pack(self, w: bytearray):
+        pack_bool(w, self.auto_fuel_enabled)
+        pack_f64(w, self.auto_fuel_threshold)
+        pack_f64(w, self.auto_fuel_amount)
+        pack_string(w, self.fuel_quote_address)
     
     def to_dict(self) -> dict:
         return {
@@ -31,16 +139,10 @@ class AutoFuelSettings:
         }
 
 
-# ===================== ENGINE COMMANDS =====================
+# ===================== ENGINE COMMAND PACKER =====================
 
 class EngineCommand:
-    """
-    Построитель команд для Rust ядра.
-    
-    Формат соответствует Rust enum:
-    - Варианты с данными: {"type": "Name", "data": {...}}
-    - Unit variants: {"type": "Name"}
-    """
+    """Builds binary commands for Rust core"""
     
     @staticmethod
     def init(
@@ -57,49 +159,60 @@ class EngineCommand:
         public_rpc_urls: List[str],
         fuel,
         quote_symbol: str,
-        quote_tokens: list
-    ) -> dict:
-        fuel_dict = fuel.to_dict() if hasattr(fuel, 'to_dict') else fuel
-        return {
-            "type": "Init",
-            "data": {
-                "rpc_url": rpc,
-                "wss_url": wss,
-                "chain_id": chain_id,
-                "router": router,
-                "quoter": quoter,
-                "v2_factory": v2_factory,
-                "v3_factory": v3_factory,
-                "wrapped_native": wrapped_native,
-                "native_address": native_address,
-                "wallets": wallets,
-                "public_rpc_urls": public_rpc_urls,
-                "fuel_settings": fuel_dict,
-                "quote_symbol": quote_symbol,
-                "quote_tokens": quote_tokens
-            }
-        }
+        quote_tokens: dict
+    ) -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.Init)
+        
+        pack_string(w, rpc)
+        pack_string(w, wss)
+        pack_u64(w, chain_id)
+        pack_string(w, router)
+        pack_string(w, quoter)
+        pack_string(w, v2_factory)
+        pack_string(w, v3_factory)
+        pack_string(w, wrapped_native)
+        pack_string(w, native_address)
+        
+        pack_u16(w, len(wallets))
+        for addr, key in wallets:
+            pack_string(w, addr)
+            pack_string(w, key)
+        
+        pack_u16(w, len(public_rpc_urls))
+        for url in public_rpc_urls:
+            pack_string(w, url)
+        
+        if hasattr(fuel, 'pack'):
+            fuel.pack(w)
+        else:
+            fs = AutoFuelSettings(**fuel) if isinstance(fuel, dict) else fuel
+            fs.pack(w)
+        
+        pack_string(w, quote_symbol)
+        
+        pack_u16(w, len(quote_tokens))
+        for sym, addr in quote_tokens.items():
+            pack_string(w, sym)
+            pack_string(w, addr)
+        
+        return bytes(w)
     
     @staticmethod
-    def switch_token(token_address: str, quote_address: str, quote_symbol: str) -> dict:
-        return {
-            "type": "SwitchToken",
-            "data": {
-                "token_address": token_address,
-                "quote_address": quote_address,
-                "quote_symbol": quote_symbol
-            }
-        }
+    def switch_token(token_address: str, quote_address: str, quote_symbol: str) -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.SwitchToken)
+        pack_string(w, token_address)
+        pack_string(w, quote_address)
+        pack_string(w, quote_symbol)
+        return bytes(w)
     
     @staticmethod
-    def unsubscribe_token(token_address: str) -> dict:
-        """Отписаться от обновлений токена"""
-        return {
-            "type": "UnsubscribeToken",
-            "data": {
-                "token_address": token_address
-            }
-        }
+    def unsubscribe_token(token_address: str) -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.UnsubscribeToken)
+        pack_string(w, token_address)
+        return bytes(w)
     
     @staticmethod
     def calc_impact(
@@ -107,16 +220,14 @@ class EngineCommand:
         quote_address: str,
         amount_in: float,
         is_buy: bool
-    ) -> dict:
-        return {
-            "type": "CalcImpact",
-            "data": {
-                "token_address": token_address,
-                "quote_address": quote_address,
-                "amount_in": amount_in,
-                "is_buy": is_buy
-            }
-        }
+    ) -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.CalcImpact)
+        pack_string(w, token_address)
+        pack_string(w, quote_address)
+        pack_f64(w, amount_in)
+        pack_bool(w, is_buy)
+        return bytes(w)
     
     @staticmethod
     def execute_trade(
@@ -129,21 +240,33 @@ class EngineCommand:
         slippage: float,
         v3_fee: int = 2500,
         amounts_wei: Optional[Dict[str, str]] = None
-    ) -> dict:
-        return {
-            "type": "ExecuteTrade",
-            "data": {
-                "action": action,
-                "token": token,
-                "quote_token": quote_token,
-                "amount": amount,
-                "wallets": wallets,
-                "gas_gwei": gas_gwei,
-                "slippage": slippage,
-                "v3_fee": v3_fee,
-                "amounts_wei": amounts_wei if amounts_wei else {}
-            }
-        }
+    ) -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.ExecuteTrade)
+        
+        pack_string(w, action)
+        pack_string(w, token)
+        pack_string(w, quote_token)
+        pack_f64(w, amount)
+        
+        pack_u16(w, len(wallets))
+        for wallet in wallets:
+            pack_string(w, wallet)
+        
+        pack_f64(w, gas_gwei)
+        pack_f64(w, slippage)
+        pack_u32(w, v3_fee)
+        
+        if amounts_wei:
+            pack_bool(w, True)
+            pack_u16(w, len(amounts_wei))
+            for k, v in amounts_wei.items():
+                pack_string(w, k)
+                pack_string(w, v)
+        else:
+            pack_bool(w, False)
+        
+        return bytes(w)
     
     @staticmethod
     def update_settings(
@@ -154,71 +277,288 @@ class EngineCommand:
         rpc_url: Optional[str] = None,
         wss_url: Optional[str] = None,
         quote_symbol: Optional[str] = None
-    ) -> dict:
+    ) -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.UpdateSettings)
+        
+        if gas_price_gwei is not None:
+            pack_bool(w, True)
+            pack_f64(w, gas_price_gwei)
+        else:
+            pack_bool(w, False)
+        
+        if slippage is not None:
+            pack_bool(w, True)
+            pack_f64(w, slippage)
+        else:
+            pack_bool(w, False)
+        
+        if fuel_enabled is not None:
+            pack_bool(w, True)
+            pack_bool(w, fuel_enabled)
+        else:
+            pack_bool(w, False)
+        
+        if fuel_quote_address is not None:
+            pack_bool(w, True)
+            pack_string(w, fuel_quote_address)
+        else:
+            pack_bool(w, False)
+        
+        if rpc_url is not None:
+            pack_bool(w, True)
+            pack_string(w, rpc_url)
+        else:
+            pack_bool(w, False)
+        
+        if wss_url is not None:
+            pack_bool(w, True)
+            pack_string(w, wss_url)
+        else:
+            pack_bool(w, False)
+        
+        if quote_symbol is not None:
+            pack_bool(w, True)
+            pack_string(w, quote_symbol)
+        else:
+            pack_bool(w, False)
+        
+        return bytes(w)
+    
+    @staticmethod
+    def update_price(symbol: str, price: float) -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.UpdatePrice)
+        pack_string(w, symbol)
+        pack_f64(w, price)
+        return bytes(w)
+    
+    @staticmethod
+    def update_token_decimals(address: str, decimals: int) -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.UpdateTokenDecimals)
+        pack_string(w, address)
+        pack_u8(w, decimals)
+        return bytes(w)
+    
+    @staticmethod
+    def add_wallet(address: str, private_key: str) -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.AddWallet)
+        pack_string(w, address)
+        pack_string(w, private_key)
+        return bytes(w)
+    
+    @staticmethod
+    def refresh_balance(wallet: str, token: str) -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.RefreshBalance)
+        pack_string(w, wallet)
+        pack_string(w, token)
+        return bytes(w)
+    
+    @staticmethod
+    def refresh_all_balances() -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.RefreshAllBalances)
+        return bytes(w)
+    
+    @staticmethod
+    def shutdown() -> bytes:
+        w = bytearray()
+        pack_u16(w, CommandType.Shutdown)
+        return bytes(w)
+
+
+# ===================== EVENT UNPACKER =====================
+
+def unpack_event(data: bytes) -> dict:
+    """Unpack binary event to dict, matches Rust EngineEvent::unpack"""
+    r = ByteReader(data)
+    
+    type_id = r.u16()
+    
+    if type_id == EventType.EngineReady:
+        return {"type": "EngineReady"}
+    
+    elif type_id == EventType.Log:
         return {
-            "type": "UpdateSettings",
+            "type": "Log",
             "data": {
-                "gas_price_gwei": gas_price_gwei,
-                "slippage": slippage,
-                "fuel_enabled": fuel_enabled,
-                "fuel_quote_address": fuel_quote_address,
-                "rpc_url": rpc_url,
-                "wss_url": wss_url,
-                "quote_symbol": quote_symbol
+                "level": r.string(),
+                "message": r.string()
             }
         }
     
-    @staticmethod
-    def update_price(symbol: str, price: float) -> dict:
+    elif type_id == EventType.ConnectionStatus:
         return {
-            "type": "UpdatePrice",
+            "type": "ConnectionStatus",
             "data": {
-                "symbol": symbol,
-                "price": price
+                "connected": r.bool_(),
+                "message": r.string()
             }
         }
     
-    @staticmethod
-    def update_token_decimals(address: str, decimals: int) -> dict:
+    elif type_id == EventType.GasPriceUpdate:
         return {
-            "type": "UpdateTokenDecimals",
+            "type": "GasPriceUpdate",
             "data": {
-                "address": address,
-                "decimals": decimals
+                "gas_price_gwei": r.f64()
             }
         }
     
-    @staticmethod
-    def add_wallet(address: str, private_key: str) -> dict:
+    elif type_id == EventType.BalanceUpdate:
         return {
-            "type": "AddWallet",
-            "data": {"address": address, "private_key": private_key}
+            "type": "BalanceUpdate",
+            "data": {
+                "wallet": r.string(),
+                "token": r.string(),
+                "wei": r.string(),
+                "float_val": r.f64(),
+                "symbol": r.string()
+            }
         }
     
-    @staticmethod
-    def refresh_balance(wallet: str, token: str) -> dict:
+    elif type_id == EventType.PoolDetected:
         return {
-            "type": "RefreshBalance",
-            "data": {"wallet": wallet, "token": token}
+            "type": "PoolDetected",
+            "data": {
+                "pool_type": r.string(),
+                "address": r.string(),
+                "token": r.string(),
+                "quote": r.string(),
+                "liquidity_usd": r.f64(),
+                "fee": r.u32(),
+                "spot_price": r.f64(),
+                "token_symbol": r.string(),
+                "token_name": r.string()
+            }
         }
     
-    @staticmethod
-    def refresh_all_balances() -> dict:
-        """Unit variant - БЕЗ data!"""
-        return {"type": "RefreshAllBalances"}
+    elif type_id == EventType.PoolUpdate:
+        return {
+            "type": "PoolUpdate",
+            "data": {
+                "pool_address": r.string(),
+                "pool_type": r.string(),
+                "token": r.string(),
+                "quote": r.string(),
+                "reserve0": r.string() if r.bool_() else None,
+                "reserve1": r.string() if r.bool_() else None,
+                "sqrt_price_x96": r.string() if r.bool_() else None,
+                "tick": r.u32() if r.bool_() else None,
+                "liquidity": r.u64() | (r.u64() << 64) if r.bool_() else None,
+                "spot_price": r.f64() if r.bool_() else None,
+                "liquidity_usd": r.f64() if r.bool_() else None
+            }
+        }
     
-    @staticmethod
-    def shutdown() -> dict:
-        """Unit variant - БЕЗ data!"""
-        return {"type": "Shutdown"}
+    elif type_id == EventType.PoolNotFound:
+        token = r.string()
+        selected_quote = r.string()
+        count = r.u16()
+        available_quotes = []
+        for _ in range(count):
+            available_quotes.append((r.string(), r.string()))
+        
+        return {
+            "type": "PoolNotFound",
+            "data": {
+                "token": token,
+                "selected_quote": selected_quote,
+                "available_quotes": available_quotes
+            }
+        }
+    
+    elif type_id == EventType.PnLUpdate:
+        return {
+            "type": "PnLUpdate",
+            "data": {
+                "wallet": r.string(),
+                "token": r.string(),
+                "pnl_pct": r.f64(),
+                "pnl_abs": r.string(),
+                "current_value": r.string(),
+                "current_price": r.f64(),
+                "is_loading": r.bool_()
+            }
+        }
+    
+    elif type_id == EventType.ImpactUpdate:
+        return {
+            "type": "ImpactUpdate",
+            "data": {
+                "token": r.string(),
+                "quote": r.string(),
+                "amount_in": r.f64(),
+                "impact_pct": r.f64(),
+                "expected_out": r.string(),
+                "is_buy": r.bool_()
+            }
+        }
+    
+    elif type_id == EventType.TradeStatus:
+        return {
+            "type": "TradeStatus",
+            "data": {
+                "wallet": r.string(),
+                "action": r.string(),
+                "status": r.string(),
+                "message": r.string(),
+                "tx_hash": r.string() if r.bool_() else None,
+                "token_address": r.string(),
+                "amount": r.f64(),
+                "tokens_received": r.string() if r.bool_() else None,
+                "tokens_sold": r.string() if r.bool_() else None,
+                "token_decimals": r.u8()
+            }
+        }
+    
+    elif type_id == EventType.TxSent:
+        return {
+            "type": "TxSent",
+            "data": {
+                "tx_hash": r.string(),
+                "wallet": r.string(),
+                "action": r.string(),
+                "amount": r.f64(),
+                "token": r.string(),
+                "timestamp_ms": r.u64()
+            }
+        }
+    
+    elif type_id == EventType.TxConfirmed:
+        return {
+            "type": "TxConfirmed",
+            "data": {
+                "tx_hash": r.string(),
+                "wallet": r.string(),
+                "gas_used": r.u64(),
+                "status": r.string(),
+                "confirm_block": r.u64(),
+                "timestamp_ms": r.u64()
+            }
+        }
+    
+    elif type_id == EventType.AutoFuelError:
+        return {
+            "type": "AutoFuelError",
+            "data": {
+                "wallet": r.string(),
+                "reason": r.string()
+            }
+        }
+    
+    else:
+        return {"type": "Unknown", "data": {"type_id": type_id}}
 
 
 # ===================== BRIDGE MANAGER =====================
 
 class BridgeManager:
     """
-    Менеджер моста между Python и Rust ядром.
-    Использует socket pair для мгновенных сигналов.
+    Bridge between Python and Rust core using Ring Buffer.
+    Event-driven, no polling.
     """
     
     def __init__(self, event_handler_callback: Callable[[dict], None]):
@@ -240,11 +580,10 @@ class BridgeManager:
         return self._connected
     
     def get_balance(self, wallet: str, token: str) -> float:
-        """Получить кэшированный баланс"""
         return self._balance_cache.get(wallet.lower(), {}).get(token.lower(), 0.0)
     
     def start(self):
-        """Запуск моста"""
+        """Start bridge"""
         if not RUST_AVAILABLE:
             print("[Bridge] Rust core not available")
             return
@@ -260,10 +599,10 @@ class BridgeManager:
         loop.add_reader(self._rsock.fileno(), self._on_rust_signal)
         
         dexbot_core.init_bridge_signal(self._wsock.fileno())
-        asyncio.create_task(self._log("BridgeManager: Транспорт инициализирован"))
+        asyncio.create_task(self._log_debug("BridgeManager: Ring Buffer initialized"))
     
     def stop(self):
-        """Остановка моста"""
+        """Stop bridge"""
         if not self._is_running:
             return
             
@@ -289,75 +628,95 @@ class BridgeManager:
         self._rsock = None
         self._wsock = None
     
+    async def _log_debug(self, message: str):
+        from utils.aiologger import log
+        await log.debug(message)
+
     def _on_rust_signal(self):
-        """Низкоуровневый обработчик: вычитывает все накопившиеся события"""
+        """Read all events from Ring Buffer"""
         try:
             self._rsock.recv(4096)
+            asyncio.create_task(self._log_debug("[Bridge] Signal received"))
             
+            count = 0
             while True:
-                raw_json = dexbot_core.pop_from_bridge()
-                if not raw_json:
+                raw = dexbot_core.pop_event_from_ring()
+                if not raw:
                     break
                 
+                count += 1
+                asyncio.create_task(self._log_debug(f"[Bridge] Event {count}: {len(raw)} bytes, hex={raw[:10].hex()}"))
+                
                 try:
-                    event = orjson.loads(raw_json)
+                    event = unpack_event(raw)
+                    asyncio.create_task(self._log_debug(f"[Bridge] Unpacked: {event.get('type')}"))
                     self._process_event(event)
                 except Exception as e:
-                    print(f"[Bridge] JSON parse error: {e}")
-                    
+                    asyncio.create_task(self._log_debug(f"[Bridge] Unpack error: {e}"))
+            
+            if count > 0:
+                asyncio.create_task(self._log_debug(f"[Bridge] Total events: {count}"))
+                        
         except BlockingIOError:
             pass
         except Exception as e:
-            print(f"[Bridge] Signal error: {e}")
-    
-    def _process_event(self, event: dict):
-        """Обработка события и обновление кэша"""
+            asyncio.create_task(self._log_debug(f"[Bridge] Signal error: {e}"))
+
+    def _process_event(self, event):
+        """Process event and update cache"""
         etype = event.get("type", "")
         data = event.get("data", {})
         
+        asyncio.create_task(self._log_debug(f"[Bridge] Processing event: {etype}"))
+        
         if etype == "ConnectionStatus":
             self._connected = data.get("connected", False)
-            
+            asyncio.create_task(self._log_debug(f"[Bridge] Connection status: {self._connected}"))
+                
         elif etype == "GasPriceUpdate":
             self._gas_price = data.get("gas_price_gwei", 1.0)
-            
+                
         elif etype == "BalanceUpdate":
             wallet = data.get("wallet", "").lower()
             token = data.get("token", "").lower()
             balance = data.get("float_val", 0.0)
-            
+                
             if wallet not in self._balance_cache:
                 self._balance_cache[wallet] = {}
             self._balance_cache[wallet][token] = balance
+            asyncio.create_task(self._log_debug(f"[Bridge] Balance updated: {wallet[:10]}... {token[:10]}... = {balance}"))
         
+        elif etype == "PoolDetected":
+            asyncio.create_task(self._log_debug(f"[Bridge] PoolDetected: {data.get('pool_type')} {data.get('address')}"))
+            
+        elif etype == "PoolNotFound":
+            asyncio.create_task(self._log_debug(f"[Bridge] PoolNotFound for token: {data.get('token')}"))
+            
+        elif etype == "PoolUpdate":
+            asyncio.create_task(self._log_debug(f"[Bridge] PoolUpdate: spot_price={data.get('spot_price')}"))
+            
         try:
             self._event_queue.put_nowait(event)
         except Exception as e:
-            print(f"[Bridge] Queue put error: {e}")
-    
-    def send(self, command):
-        """Отправка команды в Rust ядро"""
+            asyncio.create_task(self._log_debug(f"[Bridge] Queue put error: {e}"))
+
+    def send(self, command: bytes):
         if not RUST_AVAILABLE:
             return
-            
         try:
-            if hasattr(command, 'model_dump'):
-                cmd_dict = command.model_dump()
-            elif hasattr(command, 'dict'):
-                cmd_dict = command.dict()
-            elif hasattr(command, 'to_dict'):
-                cmd_dict = command.to_dict()
-            elif hasattr(command, '__dataclass_fields__'):
-                from dataclasses import asdict
-                cmd_dict = asdict(command)
-            else:
-                cmd_dict = command
+            # Дебаг: первые 2 байта = тип команды
+            cmd_type = int.from_bytes(command[:2], 'little') if len(command) >= 2 else 0
+            asyncio.create_task(self._log_debug(f"[Bridge] SEND cmd_type=0x{cmd_type:04X} len={len(command)}"))
             
-            cmd_json = orjson.dumps(cmd_dict).decode('utf-8')
-            dexbot_core.push_to_engine(cmd_json)
+            # Лог ДО
+            asyncio.create_task(self._log_debug(f"[Bridge] BEFORE push_command_to_ring"))
+            success = dexbot_core.push_command_to_ring(command)
+            # Лог ПОСЛЕ
+            asyncio.create_task(self._log_debug(f"[Bridge] AFTER push_command_to_ring: success={success}"))
+            
+            if success:
+                asyncio.create_task(self._log_debug(f"[Bridge] BEFORE process_commands"))
+                dexbot_core.process_commands()
+                asyncio.create_task(self._log_debug(f"[Bridge] AFTER process_commands"))
         except Exception as e:
-            print(f"[Bridge] Send error: {e}")
-    
-    async def _log(self, message: str):
-        from utils.aiologger import log
-        await log.info(message)
+            asyncio.create_task(self._log_debug(f"[Bridge] Send error: {e}"))

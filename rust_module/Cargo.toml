@@ -1,6 +1,6 @@
 [package]
 name = "dexbot_core"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 
 [lib]
@@ -26,6 +26,13 @@ chrono = "0.4"
 # --- JSON Parsing ---
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# --- Quick Wins ---
+rustc-hash = "2.0"
+parking_lot = "0.12"
+
+# --- Sharded State ---
+dashmap = "5.5"
 
 # --- Encryption ---
 aes-gcm = { version = "0.10.3", features = ["std"] }

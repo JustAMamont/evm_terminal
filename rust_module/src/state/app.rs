@@ -2,6 +2,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use once_cell::sync::Lazy;
 use ethers::types::{Address, U256, H256, H160};
+use dashmap::DashMap;
+use rustc_hash::FxHasher;
+use std::hash::BuildHasherDefault;
+
+//type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub type FxDashMap<K, V> = DashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub fn new_fx_dashmap<K: Eq + std::hash::Hash, V>() -> FxDashMap<K, V> {
+    FxDashMap::with_hasher(BuildHasherDefault::default())
+}
 
 #[derive(Clone, Default, Debug)]
 pub struct V3PoolState {
@@ -32,14 +41,14 @@ pub struct BotState {
     pub nonce_map: HashMap<Address, u64>,
     
     // Prices & Decimals
-    pub usd_prices: HashMap<String, f64>,
-    pub decimals_cache: HashMap<Address, u8>,
+    pub usd_prices: FxDashMap<String, f64>,
+    pub decimals_cache: FxDashMap<Address, u8>,
     
     // V2 Pools
-    pub v2_reserves: HashMap<H160, (U256, U256)>,
+    pub v2_reserves: FxDashMap<H160, (U256, U256)>,
     
     // V3 Pools
-    pub v3_states: HashMap<H160, V3PoolState>,
+    pub v3_states: FxDashMap<H160, V3PoolState>,
     
     // Auto-fuel
     pub fuel_enabled: bool,
@@ -73,7 +82,7 @@ pub static CORE_STATE: Lazy<Arc<RwLock<BotState>>> = Lazy::new(|| {
         gas_price: U256::zero(),
         slippage: 15.0,
         manual_gas_price_gwei: 0.1,
-        usd_prices: HashMap::new(),
+        usd_prices: FxDashMap::default(),
         router_address: Address::zero(),
         quoter_address: Address::zero(),
         v2_factory_address: Address::zero(),
@@ -82,9 +91,9 @@ pub static CORE_STATE: Lazy<Arc<RwLock<BotState>>> = Lazy::new(|| {
         wrapped_native_address: Address::zero(),
         wallet_keys: HashMap::new(),
         wss_url: String::new(),
-        decimals_cache: HashMap::new(),
-        v2_reserves: HashMap::new(),
-        v3_states: HashMap::new(),
+        decimals_cache: FxDashMap::default(),
+        v2_reserves: new_fx_dashmap(),
+        v3_states: new_fx_dashmap(),
         fuel_enabled: false,
         fuel_threshold: U256::zero(),
         fuel_amount: U256::zero(),

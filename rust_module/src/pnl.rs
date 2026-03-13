@@ -30,7 +30,7 @@ pub async fn start_pnl_worker() {
         };
 
         // Получаем цену quote токена из usd_prices по динамическому символу
-        let quote_price = prices.get(&quote_symbol).cloned().unwrap_or(1.0);
+        let quote_price = prices.get(&quote_symbol).map(|v| *v).unwrap_or(1.0);
 
         for (pool_addr, (r_token, r_quote)) in reserves {
             if r_token.is_zero() || r_quote.is_zero() { 

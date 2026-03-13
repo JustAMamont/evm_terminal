@@ -2,15 +2,14 @@ use ethers::prelude::*;
 use ethers::utils::format_units;
 use std::time::{Instant, Duration};
 use tokio::time::{sleep, timeout, interval};
-use std::collections::HashMap;
 
 use crate::state::{RPC_POOL, SHUTDOWN_FLAG, GLOBAL_HTTP_CLIENT, CORE_STATE, TRACKED_WALLETS, V3PoolState};
+use crate::state::app::FxDashMap;
 use crate::bridge::{emit_event, EngineEvent, emit_log};
 use crate::execution;
 use futures::StreamExt;
 use std::sync::Arc;
 use url::Url;
-
 
 abigen!(
     UniversalABI,
@@ -57,21 +56,21 @@ fn current_timestamp_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn get_quote_price_usd(quote_symbol: &str, usd_prices: &HashMap<String, f64>) -> f64 {
+fn get_quote_price_usd(quote_symbol: &str, usd_prices: &FxDashMap<String, f64>) -> f64 {
     if quote_symbol.is_empty() { return 1.0; }
-    if let Some(&price) = usd_prices.get(quote_symbol) { return price; }
+    if let Some(price) = usd_prices.get(quote_symbol) { return *price; }
     if quote_symbol.starts_with('W') && quote_symbol.len() > 1 {
         let without_w = &quote_symbol[1..];
-        if let Some(&price) = usd_prices.get(without_w) { return price; }
+        if let Some(price) = usd_prices.get(without_w) { return *price; }
     }
     let with_w = format!("W{}", quote_symbol);
-    if let Some(&price) = usd_prices.get(&with_w) { return price; }
+    if let Some(price) = usd_prices.get(&with_w) { return *price; }
     1.0
 }
 
 pub async fn get_decimals_cached(token: Address) -> u8 {
     if let Some(dec) = CORE_STATE.read().unwrap().decimals_cache.get(&token) { return *dec; }
-    let urls = { RPC_POOL.read().unwrap().get_fastest_pool(3) };
+    let urls = { RPC_POOL.read().get_fastest_pool(3) };
     for url_str in urls {
         if let Ok(url) = Url::parse(&url_str) {
             let provider = Arc::new(Provider::new(Http::new_with_client(url, GLOBAL_HTTP_CLIENT.clone())));
@@ -121,7 +120,7 @@ async fn prefetch_all_data(
         emit_log("DEBUG", format!("⚡ Prefetch: Gas price = {} Gwei", gas.as_u64() / 1_000_000_000));
     }
     
-    let mut native_balance_tasks = Vec::new();
+    let mut native_balance_tasks = Vec::with_capacity(wallets.len());
     for wallet in wallets.clone() {
         let p = provider.clone();
         native_balance_tasks.push(async move {
@@ -172,7 +171,7 @@ async fn prefetch_all_data(
         let q_dec = get_decimals_cached(quote).await;
         let (t0, _) = if token < quote { (token, quote) } else { (quote, token) };
         let t0_is_quote = t0 == quote;
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(pool_targets.len());
 
         for &addr in &pool_targets {
             let contract = UniversalABI::new(addr, provider.clone());
@@ -370,7 +369,7 @@ impl WebSocketManager {
     }
 
     async fn get_http_provider(&self) -> Option<Arc<Provider<Http>>> {
-        let urls = { RPC_POOL.read().unwrap().get_fastest_pool(3) };
+        let urls = { RPC_POOL.read().get_fastest_pool(3) };
         for url_str in urls {
             if let Ok(url) = Url::parse(&url_str) {
                 let provider = Arc::new(Provider::new(Http::new_with_client(url, GLOBAL_HTTP_CLIENT.clone())));
@@ -622,7 +621,7 @@ impl WebSocketManager {
                         
                         if let Ok(swap) = <SwapFilter as EthEvent>::decode_log(&raw) {
                             let mut s = CORE_STATE.write().unwrap();
-                            if let Some(pool) = s.v3_states.get_mut(&log.address) {
+                            if let Some(mut pool) = s.v3_states.get_mut(&log.address) {
                                 pool.sqrt_price_x96 = swap.sqrt_price_x96;
                                 pool.liquidity = swap.liquidity.into();
                                 pool.tick = swap.tick;
@@ -822,7 +821,7 @@ fn select_best_pool(mut candidates: Vec<PoolCandidate>, trade_amount_usd: f64) -
 pub async fn discover_pools(token: Address, quote: Address) -> Vec<Address> {
     let mut targets = vec![token];
     let (v2_f, v3_f) = { let s = CORE_STATE.read().unwrap(); (s.v2_factory_address, s.v3_factory_address) };
-    let rpc_urls = { RPC_POOL.read().unwrap().get_fastest_pool(5) };
+    let rpc_urls = { RPC_POOL.read().get_fastest_pool(5) };
     
     // === ДОБАВИТЬ ЛОГИ ===
     emit_log("DEBUG", format!("discover_pools: {} RPC URLs", rpc_urls.len()));
@@ -962,9 +961,9 @@ pub async fn rpc_health_checker(urls: Vec<String>) {
             if let Ok(url) = Url::parse(url_str) {
                 let provider = Provider::new(Http::new_with_client(url, GLOBAL_HTTP_CLIENT.clone()));
                 if timeout(Duration::from_secs(2), provider.get_block_number()).await.is_ok() {
-                    RPC_POOL.write().unwrap().update_latency(url_str, start.elapsed().as_micros());
+                    RPC_POOL.write().update_latency(url_str, start.elapsed().as_micros());
                 } else { 
-                    RPC_POOL.write().unwrap().mark_fail(url_str); 
+                    RPC_POOL.write().mark_fail(url_str); 
                 }
             }
         }
@@ -978,7 +977,7 @@ pub async fn start_background_worker(_wss_url: String) {
         if SHUTDOWN_FLAG.load(std::sync::atomic::Ordering::Relaxed) { break; }
         
         let wallets: Vec<Address> = TRACKED_WALLETS.read().unwrap().clone();
-        let url_opt = { let p = RPC_POOL.read().unwrap(); p.get_fastest_node() };
+        let url_opt = { let p = RPC_POOL.read(); p.get_fastest_node() };
         let quote_token = { CORE_STATE.read().unwrap().fuel_quote_address };
         
         if let Some(url_str) = url_opt {

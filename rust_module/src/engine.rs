@@ -2,11 +2,14 @@ use pyo3::prelude::*;
 use tokio::sync::mpsc;
 use once_cell::sync::Lazy;
 use ethers::prelude::*;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{Ordering, AtomicU32, AtomicU64};
 use std::str::FromStr;
 
 use crate::bridge::{EngineCommand, EngineEvent, emit_event, emit_log};
-use crate::state::{RUNTIME, SHUTDOWN_FLAG, CORE_STATE, RPC_POOL, RpcNode, TRACKED_WALLETS, MONITOR_HANDLE, INTERNAL_HANDLE, RPC_CHECKER_HANDLE, PNL_HANDLE};
+use crate::state::{
+    RUNTIME, SHUTDOWN_FLAG, CORE_STATE, RPC_POOL, RpcNode, TRACKED_WALLETS, 
+    MONITOR_HANDLE, INTERNAL_HANDLE, RPC_CHECKER_HANDLE, PNL_HANDLE
+};
 use crate::monitor;
 use crate::execution;
 use crate::pnl;
@@ -56,8 +59,11 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
 
                 let mut all_urls = public_rpc_urls; 
                 all_urls.push(rpc_url.clone());
-                RPC_POOL.write().unwrap().nodes = all_urls.iter().map(|u| RpcNode { 
-                    url: u.clone(), latency: u128::MAX, is_private: u == &rpc_url, fails: 0 
+                RPC_POOL.write().nodes = all_urls.iter().map(|u| RpcNode { 
+                    url: u.clone(), 
+                    latency_ns: AtomicU64::new(u128::MAX as u64),
+                    fail_count: AtomicU32::new(0),
+                    is_private: u == &rpc_url, 
                 }).collect();
 
                 {
@@ -89,7 +95,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                         .filter_map(|(k, v)| Address::from_str(&v).ok().map(|a| (k, a)))
                         .collect();
                     
-                    TRACKED_WALLETS.write().unwrap().clear();
+                    TRACKED_WALLETS.write().unwrap().reserve(wallets.len());
                     for (a, k) in wallets { 
                         if let Ok(addr) = Address::from_str(&a) { 
                             s.wallet_keys.insert(addr, k); 
@@ -126,17 +132,33 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
             }
 
             EngineCommand::SwitchToken { token_address, quote_address, quote_symbol } => {
-                let t = Address::from_str(&token_address).unwrap();
-                let q = Address::from_str(&quote_address).unwrap();
+                emit_log("INFO", format!("[Rust] SwitchToken START: token={}, quote={}", token_address, quote_address));
+                
+                let t = match Address::from_str(&token_address) {
+                    Ok(addr) => addr,
+                    Err(e) => {
+                        emit_log("ERROR", format!("[Rust] SwitchToken: invalid token address: {}", e));
+                        return;
+                    }
+                };
+                
+                let q = match Address::from_str(&quote_address) {
+                    Ok(addr) => addr,
+                    Err(e) => {
+                        emit_log("ERROR", format!("[Rust] SwitchToken: invalid quote address: {}", e));
+                        return;
+                    }
+                };
 
                 let all_quotes: Vec<(String, Address)> = {
                     let s = CORE_STATE.read().unwrap();
                     s.quote_tokens.iter().map(|(k, v)| (k.clone(), *v)).collect()
                 };
                 
+                emit_log("INFO", format!("[Rust] SwitchToken: all_quotes count={}", all_quotes.len()));
+                
                 {
                     let mut s = CORE_STATE.write().unwrap();
-                    // ОЧИСТКА ДАННЫХ ПРЕДЫДУЩЕГО ПУЛА
                     s.selected_pool_type = None;
                     s.selected_pool_fee = 0;
                     s.selected_pool_address = None;
@@ -147,20 +169,26 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                     
                     s.fuel_quote_address = q;
                     s.quote_symbol = quote_symbol.clone();
-                    emit_log("INFO", format!("🔄 Quote токен установлен: {:?} ({})", q, quote_symbol));
+                    crate::bridge::emit_log("INFO", format!("[Rust] SwitchToken: quote set to {} ({})", quote_symbol, quote_address));
                 }
                 
+                crate::bridge::emit_log("INFO", "[Rust] SwitchToken: spawning check_and_auto_approve_background".into());
                 RUNTIME.spawn(async move {
                     execution::check_and_auto_approve_background(t, q).await;
                 });
 
                 if let Some(old) = MONITOR_HANDLE.lock().unwrap().take() { 
                     old.abort(); 
+                    crate::bridge::emit_log("INFO", "[Rust] SwitchToken: old monitor aborted".into());
                 }
                 
                 let wss = { CORE_STATE.read().unwrap().wss_url.clone() };
+                crate::bridge::emit_log("INFO", format!("[Rust] SwitchToken: starting monitor, wss={}", wss));
+                
                 let handle = RUNTIME.spawn(monitor::start_unified_websocket_monitor(wss, t, q, all_quotes));
                 *MONITOR_HANDLE.lock().unwrap() = Some(handle.abort_handle());
+                
+                crate::bridge::emit_log("INFO", "[Rust] SwitchToken: DONE, monitor started".into());
             }
 
             EngineCommand::UnsubscribeToken { token_address } => {
@@ -303,9 +331,14 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 }
                 
                 if let Some(new_rpc) = rpc_url {
-                    let mut pool = RPC_POOL.write().unwrap(); 
+                    let mut pool = RPC_POOL.write(); 
                     pool.nodes.clear();
-                    pool.nodes.push(RpcNode { url: new_rpc.clone(), latency: 0, is_private: true, fails: 0 });
+                    pool.nodes.push(RpcNode { 
+                        url: new_rpc.clone(), 
+                        latency_ns: AtomicU64::new(0),
+                        fail_count: AtomicU32::new(0),
+                        is_private: true 
+                    });
                 }
                 
                 if let Some(new_wss) = wss_url {
@@ -322,7 +355,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 if let (Some(w), Some(t)) = (wallet_addr, token_addr) {
                     RUNTIME.spawn(async move {
                         if t == Address::zero() || t == Address::from_str("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap() {
-                            let url_opt = { let p = RPC_POOL.read().unwrap(); p.get_fastest_node() };
+                            let url_opt = { let p = RPC_POOL.read(); p.get_fastest_node() };
                             if let Some(url_str) = url_opt {
                                 if let Ok(url) = url::Url::parse(&url_str) {
                                     let provider = Provider::new(Http::new_with_client(url, crate::state::GLOBAL_HTTP_CLIENT.clone()));
@@ -366,7 +399,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 let quote_token = { CORE_STATE.read().unwrap().fuel_quote_address };
                 
                 RUNTIME.spawn(async move {
-                    let url_opt = { let p = RPC_POOL.read().unwrap(); p.get_fastest_node() };
+                    let url_opt = { let p = RPC_POOL.read(); p.get_fastest_node() };
                     if let Some(url_str) = url_opt {
                         if let Ok(url) = url::Url::parse(&url_str) {
                             let provider = Provider::new(Http::new_with_client(url, crate::state::GLOBAL_HTTP_CLIENT.clone()));
@@ -413,6 +446,12 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
             }
         }
     }
+}
+
+/// Отправка команды в engine (для Ring Buffer)
+pub fn send_command(cmd: EngineCommand) {
+    emit_log("DEBUG", format!("[Rust] send_command: {:?}", std::mem::discriminant(&cmd)));
+    let _ = COMMAND_TX.send(cmd);
 }
 
 #[pyfunction]

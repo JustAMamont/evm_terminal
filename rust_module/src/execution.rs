@@ -57,7 +57,7 @@ fn current_timestamp_ms() -> u64 {
 
 /// Получить баланс ERC20 токена для адреса
 pub async fn get_token_balance(token: Address, wallet: Address) -> U256 {
-    let url_opt = { RPC_POOL.read().unwrap().get_fastest_node() };
+    let url_opt = { RPC_POOL.read().get_fastest_node() };
     if let Some(url) = url_opt {
         if let Ok(u) = Url::parse(&url) {
             let p = Arc::new(Provider::new(Http::new_with_client(u, GLOBAL_HTTP_CLIENT.clone())));
@@ -72,7 +72,7 @@ pub async fn get_token_balance(token: Address, wallet: Address) -> U256 {
 
 /// Получить symbol и name токена
 pub async fn get_token_info(token: Address) -> (String, String) {
-    let url_opt = { RPC_POOL.read().unwrap().get_fastest_node() };
+    let url_opt = { RPC_POOL.read().get_fastest_node() };
     if let Some(url) = url_opt {
         if let Ok(u) = Url::parse(&url) {
             let p = Arc::new(Provider::new(Http::new_with_client(u, GLOBAL_HTTP_CLIENT.clone())));
@@ -93,7 +93,7 @@ pub async fn check_and_auto_approve_background(token: Address, quote: Address) {
         (s.router_address, s.chain_id, s.wallet_keys.clone())
     };
     
-    let url_opt = { RPC_POOL.read().unwrap().get_fastest_node() };
+    let url_opt = { RPC_POOL.read().get_fastest_node() };
     if let Some(url) = url_opt {
         if let Ok(u) = Url::parse(&url) {
             let p = Arc::new(Provider::new(Http::new_with_client(u, GLOBAL_HTTP_CLIENT.clone())));
@@ -205,7 +205,7 @@ pub async fn calculate_expected_out_v3_quoted(
 ) -> U256 {
     if amount_in.is_zero() { return U256::zero(); }
     
-    let url_opt = { RPC_POOL.read().unwrap().get_fastest_node() };
+    let url_opt = { RPC_POOL.read().get_fastest_node() };
     if let Some(url_str) = url_opt {
         if let Ok(url) = Url::parse(&url_str) {
             let provider = Arc::new(Provider::new(Http::new_with_client(url, GLOBAL_HTTP_CLIENT.clone())));
@@ -279,7 +279,7 @@ pub async fn run_batch_trade(
 ) -> Vec<EngineEvent> {
     let start_time = std::time::Instant::now();
     emit_log("DEBUG", format!("[TRADE] START | action={} | amount={} | gas_gwei={}", action, amount, gas));
-    let mut events = Vec::new();
+    let mut events = Vec::with_capacity(keys.len());
     let (p_type, p_fee) = { 
         let s = CORE_STATE.read().unwrap(); 
         (s.selected_pool_type.clone().unwrap_or_default(), s.selected_pool_fee) 
@@ -300,7 +300,7 @@ pub async fn run_batch_trade(
         }]; 
     }
     
-    let url_opt = { RPC_POOL.read().unwrap().get_fastest_node() };
+    let url_opt = { RPC_POOL.read().get_fastest_node() };
     
     for pk in keys {
         let wallet: LocalWallet = match pk.parse::<LocalWallet>() { 
@@ -310,8 +310,14 @@ pub async fn run_batch_trade(
         
         let wallet_addr = wallet.address();
         let (t_in, t_out) = if action == "buy" { (quote, token) } else { (token, quote) };
-        let dec = { *CORE_STATE.read().unwrap().decimals_cache.get(&t_in).unwrap_or(&18) };
-        
+        let dec = { 
+            CORE_STATE.read().unwrap()
+                .decimals_cache
+                .get(&t_in)
+                .map(|v| *v)
+                .unwrap_or(18)
+        };       
+         
         // Безопасный парсинг суммы с учетом точной продажи 100%
         let mut amount_wei: U256 = match parse_units(amount, dec as u32) {
             Ok(v) => v.into(),
@@ -519,7 +525,7 @@ pub async fn run_batch_trade(
 /// Параллельная отправка транзакции на несколько RPC
 async fn parallel_broadcast(data: Bytes) -> String {
     let t_start = std::time::Instant::now();
-    let urls = { RPC_POOL.read().unwrap().get_fastest_pool(3) };
+    let urls = { RPC_POOL.read().get_fastest_pool(3) };
     emit_log("DEBUG", format!("[BROADCAST] START | {} nodes", urls.len()));
 
     let mut tasks = Vec::new();
@@ -607,7 +613,7 @@ pub async fn run_auto_fuel(
     // === Swap через TaxRouter ===
     emit_log("INFO", format!("⛽ Auto-Fuel: swap {:?} → BNB via TaxRouter", quote));
     
-    let url_opt = { RPC_POOL.read().unwrap().get_fastest_node() };
+    let url_opt = { RPC_POOL.read().get_fastest_node() };
     if let Some(url) = url_opt {
         if let Ok(u) = Url::parse(&url) {
             let p = Arc::new(Provider::new(Http::new_with_client(u, GLOBAL_HTTP_CLIENT.clone())));
