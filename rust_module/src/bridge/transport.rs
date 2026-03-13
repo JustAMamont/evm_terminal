@@ -26,9 +26,11 @@ pub fn set_signal_socket(fd: u64) -> Result<(), String> {
 
 /// Signal Python that data is available
 pub fn signal_python() {
-    if let Some(mut sock) = SIGNAL_TX.lock().unwrap().take() {
-        let _ = sock.write(b"\x00");
-        *SIGNAL_TX.lock().unwrap() = Some(sock);
+    // try_lock() возвращает Result, не Option
+    if let Ok(mut guard) = SIGNAL_TX.try_lock() {
+        if let Some(ref mut sock) = guard.as_mut() {
+            let _ = sock.write(b"\x00");
+        }
     }
 }
 

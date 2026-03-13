@@ -4,7 +4,6 @@ pub mod pack;
 pub mod ring;
 
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 pub use models::{EngineEvent, EngineCommand};
@@ -15,9 +14,6 @@ use pack::Packable;
 // ===================== RING BUFFERS =====================
 pub static EVENT_RING: Lazy<RingBuffer> = Lazy::new(RingBuffer::new);
 pub static COMMAND_RING: Lazy<RingBuffer> = Lazy::new(RingBuffer::new);
-
-// ===================== PROCESSING FLAG =====================
-static IN_PROCESSING: AtomicBool = AtomicBool::new(false);
 
 // ===================== DEDUPLICATION CACHE =====================
 static LAST_BALANCE: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
@@ -99,24 +95,25 @@ pub fn emit_event(event: EngineEvent) {
         if let Ok(json) = serde_json::to_string(&event) {
             send_to_python(json);
         }
-    } else if !IN_PROCESSING.load(Ordering::Relaxed) {
-        // Signal Python that new event is available (skip if in processing)
+    } else {
+        // ИСПРАВЛЕНИЕ: Всегда сигналить Python, без проверки IN_PROCESSING
         transport::signal_python();
     }
 }
 
 // ====== SENDING LOGS TO PYTHON ======
 
-pub const DEBUG_MODE: bool = true;
+pub const DEBUG_MODE: bool = false;
 
-// Безопасная версия для вызова внутри process_commands
 pub fn emit_log(level: &str, message: String) {
     if !DEBUG_MODE && level == "DEBUG" { return; }
     
-    // Прямая запись в ring без дедупликации и без signal_python
     let mut payload = Vec::with_capacity(ring::MAX_MSG_SIZE);
     EngineEvent::Log { level: level.to_string(), message }.pack(&mut payload);
-    let _ = EVENT_RING.push(&payload);
+    if EVENT_RING.push(&payload).is_ok() {
+        // ИСПРАВЛЕНИЕ: Сигналить Python о новом событии
+        transport::signal_python();
+    }
 }
 
 // ===================== PYTHON API =====================
@@ -149,7 +146,7 @@ pub fn process_commands(_py: Python<'_>) -> PyResult<()> {
     let ring_len = COMMAND_RING.len();
     emit_log("DEBUG", format!("[Rust] process_commands START: ring_len={}", ring_len));
     
-    IN_PROCESSING.store(true, Ordering::Relaxed);
+    // УБРАНО: IN_PROCESSING.store(true, ...) - больше не нужен
     
     while let Some(data) = COMMAND_RING.pop() {
         match EngineCommand::unpack(&mut data.as_slice()) {
@@ -163,6 +160,8 @@ pub fn process_commands(_py: Python<'_>) -> PyResult<()> {
         }
     }
     
-    IN_PROCESSING.store(false, Ordering::Relaxed);
+    // Сигналим Python о событиях после обработки команд
+    transport::signal_python();
+    
     Ok(())
 }
