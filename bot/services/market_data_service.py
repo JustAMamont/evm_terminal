@@ -64,7 +64,7 @@ class MarketDataService:
                     
                     # Отправляем цену в Rust Engine
                     if self.bridge:
-                        self.bridge.send(EngineCommand.update_price(
+                        await self.bridge.send(EngineCommand.update_price(
                             symbol=base_symbol, 
                             price=price
                         ))

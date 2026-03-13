@@ -129,7 +129,7 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
     TUI_APP_INSTANCE._current_quote_address = quote_address
 
     bridge = BridgeManager(event_handler_callback=TUI_APP_INSTANCE.handle_rust_event)
-    bridge.start() 
+    await bridge.start() 
     TUI_APP_INSTANCE.bridge = bridge
 
     wallets_raw = await db_manager.get_all_wallets_raw()
@@ -187,9 +187,9 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
         quote_symbol=default_quote,
         quote_tokens=app_config.QUOTE_TOKENS
     )
-    bridge.send(init_cmd)
+    await bridge.send(init_cmd)
     
-    bridge.send(EngineCommand.update_settings(
+    await bridge.send(EngineCommand.update_settings(
         gas_price_gwei=float(config_db.get('default_gas_price_gwei', 0.1)),
         slippage=float(config_db.get('slippage', 15.0)),
         fuel_enabled=fuel.auto_fuel_enabled
@@ -202,7 +202,7 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
     market_data_service.bridge = bridge
     market_data_service.start()
 
-    bridge.send(EngineCommand.refresh_all_balances())
+    await bridge.send(EngineCommand.refresh_all_balances())
 
     next_network = await TUI_APP_INSTANCE.run_async()
     
@@ -211,7 +211,7 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
         await save_last_network(db_manager, next_network)
 
     await market_data_service.stop()
-    bridge.stop()
+    await bridge.stop()
     await db_manager.close()
     
     TUI_APP_INSTANCE = None

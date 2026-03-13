@@ -556,11 +556,6 @@ def unpack_event(data: bytes) -> dict:
 # ===================== BRIDGE MANAGER =====================
 
 class BridgeManager:
-    """
-    Bridge between Python and Rust core using Ring Buffer.
-    Event-driven, no polling.
-    """
-    
     def __init__(self, event_handler_callback: Callable[[dict], None]):
         self.event_handler = event_handler_callback
         self._rsock: Optional[socket.socket] = None
@@ -570,6 +565,7 @@ class BridgeManager:
         self._gas_price: float = 1.0
         self._connected: bool = False
         self._event_queue: asyncio.Queue = asyncio.Queue()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         
     @property
     def gas_price(self) -> float:
@@ -582,141 +578,82 @@ class BridgeManager:
     def get_balance(self, wallet: str, token: str) -> float:
         return self._balance_cache.get(wallet.lower(), {}).get(token.lower(), 0.0)
     
-    def start(self):
-        """Start bridge"""
-        if not RUST_AVAILABLE:
-            print("[Bridge] Rust core not available")
-            return
-            
-        if self._is_running:
-            return
-        
+    async def start(self):
+        self._loop = asyncio.get_running_loop()
         self._rsock, self._wsock = socket.socketpair()
         self._rsock.setblocking(False)
         self._is_running = True
         
-        loop = asyncio.get_running_loop()
-        loop.add_reader(self._rsock.fileno(), self._on_rust_signal)
+        await dexbot_core.init_bridge_signal(self._wsock.fileno())
         
-        dexbot_core.init_bridge_signal(self._wsock.fileno())
-        asyncio.create_task(self._log_debug("BridgeManager: Ring Buffer initialized"))
+        self._loop.add_reader(self._rsock.fileno(), self._on_signal)
+
+    def _on_signal(self):
+        try:
+            self._rsock.recv(4096)
+        except BlockingIOError:
+            pass
+        
+        while True:
+            raw = dexbot_core.pop_event_from_ring()
+            if not raw:
+                break
+            try:
+                event = unpack_event(raw)
+                self._process_event(event)
+            except Exception:
+                pass
     
-    def stop(self):
-        """Stop bridge"""
+    async def stop(self):
         if not self._is_running:
             return
-            
+        
         self._is_running = False
         
-        try:
-            loop = asyncio.get_running_loop()
-            loop.remove_reader(self._rsock.fileno())
-        except:
-            pass
+        if self._loop and self._rsock:
+            try:
+                self._loop.remove_reader(self._rsock.fileno())
+            except Exception:
+                pass
         
-        try:
-            if self._rsock:
-                self._rsock.close()
-        except:
-            pass
-        try:
-            if self._wsock:
-                self._wsock.close()
-        except:
-            pass
-            
+        if self._rsock:
+            self._rsock.close()
+        if self._wsock:
+            self._wsock.close()
         self._rsock = None
         self._wsock = None
     
-    async def _log_debug(self, message: str):
-        from utils.aiologger import log
-        await log.debug(message)
 
-    def _on_rust_signal(self):
-        """Read all events from Ring Buffer"""
-        try:
-            self._rsock.recv(4096)
-            asyncio.create_task(self._log_debug("[Bridge] Signal received"))
-            
-            count = 0
-            while True:
-                raw = dexbot_core.pop_event_from_ring()
-                if not raw:
-                    break
-                
-                count += 1
-                asyncio.create_task(self._log_debug(f"[Bridge] Event {count}: {len(raw)} bytes, hex={raw[:10].hex()}"))
-                
-                try:
-                    event = unpack_event(raw)
-                    asyncio.create_task(self._log_debug(f"[Bridge] Unpacked: {event.get('type')}"))
-                    self._process_event(event)
-                except Exception as e:
-                    asyncio.create_task(self._log_debug(f"[Bridge] Unpack error: {e}"))
-            
-            if count > 0:
-                asyncio.create_task(self._log_debug(f"[Bridge] Total events: {count}"))
-                        
-        except BlockingIOError:
-            pass
-        except Exception as e:
-            asyncio.create_task(self._log_debug(f"[Bridge] Signal error: {e}"))
-
+    async def _process_pending_events(self):
+        while True:
+            raw = await dexbot_core.pop_event_from_ring()
+            if not raw:
+                break
+            try:
+                event = unpack_event(raw)
+                self._process_event(event)
+            except Exception:
+                pass
+    
     def _process_event(self, event):
-        """Process event and update cache"""
         etype = event.get("type", "")
         data = event.get("data", {})
         
-        asyncio.create_task(self._log_debug(f"[Bridge] Processing event: {etype}"))
-        
         if etype == "ConnectionStatus":
             self._connected = data.get("connected", False)
-            asyncio.create_task(self._log_debug(f"[Bridge] Connection status: {self._connected}"))
-                
         elif etype == "GasPriceUpdate":
             self._gas_price = data.get("gas_price_gwei", 1.0)
-                
         elif etype == "BalanceUpdate":
             wallet = data.get("wallet", "").lower()
             token = data.get("token", "").lower()
             balance = data.get("float_val", 0.0)
-                
             if wallet not in self._balance_cache:
                 self._balance_cache[wallet] = {}
             self._balance_cache[wallet][token] = balance
-            asyncio.create_task(self._log_debug(f"[Bridge] Balance updated: {wallet[:10]}... {token[:10]}... = {balance}"))
         
-        elif etype == "PoolDetected":
-            asyncio.create_task(self._log_debug(f"[Bridge] PoolDetected: {data.get('pool_type')} {data.get('address')}"))
-            
-        elif etype == "PoolNotFound":
-            asyncio.create_task(self._log_debug(f"[Bridge] PoolNotFound for token: {data.get('token')}"))
-            
-        elif etype == "PoolUpdate":
-            asyncio.create_task(self._log_debug(f"[Bridge] PoolUpdate: spot_price={data.get('spot_price')}"))
-            
-        try:
-            self._event_queue.put_nowait(event)
-        except Exception as e:
-            asyncio.create_task(self._log_debug(f"[Bridge] Queue put error: {e}"))
-
-    def send(self, command: bytes):
+        self._event_queue.put_nowait(event)
+    
+    async def send(self, command: bytes):
         if not RUST_AVAILABLE:
             return
-        try:
-            # Дебаг: первые 2 байта = тип команды
-            cmd_type = int.from_bytes(command[:2], 'little') if len(command) >= 2 else 0
-            asyncio.create_task(self._log_debug(f"[Bridge] SEND cmd_type=0x{cmd_type:04X} len={len(command)}"))
-            
-            # Лог ДО
-            asyncio.create_task(self._log_debug(f"[Bridge] BEFORE push_command_to_ring"))
-            success = dexbot_core.push_command_to_ring(command)
-            # Лог ПОСЛЕ
-            asyncio.create_task(self._log_debug(f"[Bridge] AFTER push_command_to_ring: success={success}"))
-            
-            if success:
-                asyncio.create_task(self._log_debug(f"[Bridge] BEFORE process_commands"))
-                dexbot_core.process_commands()
-                asyncio.create_task(self._log_debug(f"[Bridge] AFTER process_commands"))
-        except Exception as e:
-            asyncio.create_task(self._log_debug(f"[Bridge] Send error: {e}"))
+        dexbot_core.push_command_to_ring(command)

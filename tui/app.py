@@ -413,7 +413,7 @@ class TradingApp(App):
         except Exception:
             pass
 
-    def on_key(self, event) -> None:
+    async def on_key(self, event) -> None:
         if event.key not in ("up", "down"):
             return
         try:
@@ -434,7 +434,7 @@ class TradingApp(App):
             mode_ru = "Покупка" if new_mode == "BUY" else "Продажа"
             self.notify(f"Режим: {mode_ru}", timeout=1)
             self._update_panel_visuals()
-            self._trigger_impact_calc()
+            await self._trigger_impact_calc()
 
     @on(Select.Changed, "#network_select")
     def on_network_change(self, event: Select.Changed):
@@ -470,14 +470,14 @@ class TradingApp(App):
         self.notify("⚡ Ядро Rust готово", severity="information", title="System")
         self.ui_update_queue.put_nowait("refresh_all")
         if self.bridge: 
-            self.bridge.send(EngineCommand.refresh_all_balances())
+            await self.bridge.send(EngineCommand.refresh_all_balances())
             
             # Обновляем балансы токенов из открытых позиций (один раз при старте)
             open_positions = self.cache.get_open_positions_tokens()
             if open_positions:
                 await log.info(f"🔄 Обновление балансов для {len(open_positions)} открытых позиций...")
                 for wallet, token in open_positions:
-                    self.bridge.send(EngineCommand.refresh_balance(wallet, token))
+                    await self.bridge.send(EngineCommand.refresh_balance(wallet, token))
             
         self._update_status_widget(StatusRPC, "OK", True)
 
@@ -542,7 +542,7 @@ class TradingApp(App):
         self._update_pool_cache(data)
         self.is_pool_loading = False
         self._update_trade_buttons_state()
-        self._trigger_impact_calc()
+        await self._trigger_impact_calc()
         
         token_symbol = data.get('token_symbol')
         if token_symbol:
@@ -600,7 +600,7 @@ class TradingApp(App):
             except Exception: pass
         
         if self._current_token_address and not self.is_pool_loading:
-            self._trigger_impact_calc()
+            await self._trigger_impact_calc()
         self.ui_update_queue.put_nowait("refresh_market_data")
 
     async def _evt_pool_not_found(self, data: dict):
@@ -1096,7 +1096,7 @@ class TradingApp(App):
             self._update_trade_buttons_state()
             
             if self.bridge and token_to_unsubscribe:
-                self.bridge.send(EngineCommand.unsubscribe_token(token_to_unsubscribe))
+                await self.bridge.send(EngineCommand.unsubscribe_token(token_to_unsubscribe))
         except Exception as e:
             await log.error(f"[TUI] Error clearing token state: {e}")
 
@@ -1119,7 +1119,7 @@ class TradingApp(App):
         self._current_quote_address = quote_address.lower() if quote_address else None
 
         if self.bridge: 
-            self.bridge.send(EngineCommand.switch_token(token_address, quote_address, quote_symbol))
+            await self.bridge.send(EngineCommand.switch_token(token_address, quote_address, quote_symbol))
 
         self._trigger_impact_calc()
 
@@ -1135,9 +1135,9 @@ class TradingApp(App):
         await asyncio.sleep(0.3)
         if not self._current_token_address:
             return
-        self._trigger_impact_calc()
+        await self._trigger_impact_calc()
 
-    def _trigger_impact_calc(self):
+    async def _trigger_impact_calc(self):
         """Пересчитывает ОБА импакта независимо от текущего режима"""
         if not self._current_token_address: return
 
@@ -1159,7 +1159,7 @@ class TradingApp(App):
             if self.bridge:
                 # === ВСЕГДА считаем BUY impact ===
                 if final_amount > 0:
-                    self.bridge.send(EngineCommand.calc_impact(
+                    await self.bridge.send(EngineCommand.calc_impact(
                         token_address=self._current_token_address, quote_address=quote_address,
                         amount_in=final_amount, is_buy=True
                     ))
@@ -1171,7 +1171,7 @@ class TradingApp(App):
                 amount_to_sell = total_tokens_wei / (10**token_dec)
                 
                 if amount_to_sell > 0:
-                    self.bridge.send(EngineCommand.calc_impact(
+                    await self.bridge.send(EngineCommand.calc_impact(
                         token_address=self._current_token_address, quote_address=quote_address,
                         amount_in=amount_to_sell, is_buy=False
                     ))
@@ -1195,13 +1195,13 @@ class TradingApp(App):
         if self._current_token_address:
             quote_address = self.app_config.QUOTE_TOKENS.get(quote_symbol, "")
             if self.bridge: 
-                self.bridge.send(EngineCommand.unsubscribe_token(self._current_token_address))
+                await self.bridge.send(EngineCommand.unsubscribe_token(self._current_token_address))
                 self._market_data = self._get_empty_market_data()
                 self._current_pool_info = {}
                 self.is_pool_loading = True
                 self._update_trade_buttons_state()
                 await asyncio.sleep(0.3)
-                self.bridge.send(EngineCommand.switch_token(
+                await self.bridge.send(EngineCommand.switch_token(
                     self._current_token_address, quote_address, quote_symbol  
                 ))
 
@@ -1220,10 +1220,10 @@ class TradingApp(App):
         self.notify(f"Quote валюта: {quote_symbol}", timeout=1)
         
         if self.bridge:
-            self.bridge.send(EngineCommand.update_settings(quote_symbol=quote_symbol))
+            await self.bridge.send(EngineCommand.update_settings(quote_symbol=quote_symbol))
         
         if self._current_token_address and self.bridge:
-            self.bridge.send(EngineCommand.switch_token(
+            await self.bridge.send(EngineCommand.switch_token(
                 self._current_token_address, quote_address, quote_symbol
             ))
 
@@ -1286,12 +1286,12 @@ class TradingApp(App):
             self._trigger_wallets_refresh()
             
             if self.bridge:
-                self.bridge.send(EngineCommand.add_wallet(address, pk))
+                await self.bridge.send(EngineCommand.add_wallet(address, pk))
                 await asyncio.sleep(0.3)
-                self.bridge.send(EngineCommand.refresh_balance(address, self.app_config.NATIVE_CURRENCY_ADDRESS))
+                await self.bridge.send(EngineCommand.refresh_balance(address, self.app_config.NATIVE_CURRENCY_ADDRESS))
                 _, quote_address = self._get_quote_info()
                 if quote_address:
-                    self.bridge.send(EngineCommand.refresh_balance(address, quote_address))
+                    await self.bridge.send(EngineCommand.refresh_balance(address, quote_address))
                 
         except Exception as e:
             self.notify(f"Ошибка: {str(e)[:50]}", severity="error")
@@ -1419,7 +1419,7 @@ class TradingApp(App):
         await log.info(f"TUI: START TRADE -> {self._active_trade_mode} {final_amount:.6f} {display_symbol}")
 
         if self.bridge:
-            self.bridge.send(EngineCommand.execute_trade(
+            await self.bridge.send(EngineCommand.execute_trade(
                 action=self._active_trade_mode.lower(), 
                 token=token_address, 
                 quote_token=quote_address,
@@ -1446,10 +1446,10 @@ class TradingApp(App):
         except Exception: pass
         self.notify(f"Gas Price: {self.current_gas_price_gwei:.2f} Gwei", timeout=1)
 
-    def action_reload_wallets(self):
+    async def action_reload_wallets(self):
         self._trigger_wallets_refresh()
         if self.bridge: 
-            self.bridge.send(EngineCommand.refresh_all_balances())
+            await self.bridge.send(EngineCommand.refresh_all_balances())
         self.notify("Кошельки обновлены.", severity="information", timeout=1)
 
     def action_clear_token_input(self):
@@ -1649,7 +1649,7 @@ class TradingApp(App):
             })
             
             if self.bridge:
-                self.bridge.send(EngineCommand.update_settings(
+                await self.bridge.send(EngineCommand.update_settings(
                     gas_price_gwei=self.current_gas_price_gwei, 
                     slippage=self.current_slippage,
                     fuel_enabled=fuel_enabled, 
