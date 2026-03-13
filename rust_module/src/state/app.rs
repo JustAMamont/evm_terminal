@@ -73,6 +73,7 @@ pub struct BotState {
     
     // === ОТСЛЕЖИВАНИЕ ТРАНЗАКЦИЙ ===
     pub pending_txs: std::collections::HashSet<H256>,
+    pub approved_tokens: FxDashMap<(Address, Address), ()>,
 }
 
 pub static CORE_STATE: Lazy<Arc<RwLock<BotState>>> = Lazy::new(|| {
@@ -107,5 +108,6 @@ pub static CORE_STATE: Lazy<Arc<RwLock<BotState>>> = Lazy::new(|| {
         selected_pool_liquidity_usd: 0.0,
         selected_pool_spot_price: 0.0,
         pending_txs: std::collections::HashSet::new(),
+        approved_tokens: new_fx_dashmap(),
     }))
 });

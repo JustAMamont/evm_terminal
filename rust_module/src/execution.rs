@@ -105,6 +105,7 @@ pub async fn check_and_auto_approve_background(token: Address, quote: Address) {
                     
                     let erc20 = IERC20::new(*t_addr, p.clone());
                     if let Ok(allowance) = erc20.allowance(w_addr, router).call().await {
+                        CORE_STATE.write().unwrap().approved_tokens.insert((w_addr, *t_addr), ());
                         if allowance < (U256::max_value() / 2) {
                             emit_log("INFO", format!("🛡️ Фоновый Check: Апрув для {:?}...", w_addr));
                             
@@ -370,64 +371,76 @@ pub async fn run_batch_trade(
         
         // ================= АВТОМАТИЧЕСКАЯ ПРОВЕРКА ALLOWANCE ПРИ ПРОДАЖЕ =================
         if action == "sell" {
-            let t_allow = std::time::Instant::now();
-            let mut allowance = U256::zero();
-            // Получаем провайдера для проверки allowance
-            if let Some(url) = &url_opt {
-                if let Ok(u) = Url::parse(url) {
-                    let p = Arc::new(Provider::new(Http::new_with_client(u, GLOBAL_HTTP_CLIENT.clone())));
-                    let erc20 = IERC20::new(t_in, p); // t_in is Token address on Sell
-                    if let Ok(a) = erc20.allowance(wallet_addr, router).call().await {
-                        allowance = a;
+            // Сначала проверяем кэш - если токен уже апрувнут, пропускаем RPC
+            if !CORE_STATE.read().unwrap().approved_tokens.contains_key(&(wallet_addr, t_in)) {
+                let t_allow = std::time::Instant::now();
+                let mut allowance = U256::zero();
+                
+                // RPC проверка только если нет в кэше
+                if let Some(url) = &url_opt {
+                    if let Ok(u) = Url::parse(url) {
+                        let p = Arc::new(Provider::new(Http::new_with_client(u, GLOBAL_HTTP_CLIENT.clone())));
+                        let erc20 = IERC20::new(t_in, p);
+                        if let Ok(a) = erc20.allowance(wallet_addr, router).call().await {
+                            allowance = a;
+                        }
+                        emit_log("DEBUG", format!("[TRADE] ALLOWANCE RPC | {}ms | allowance={}", t_allow.elapsed().as_millis(), allowance));
                     }
-                emit_log("DEBUG", format!("[TRADE] ALLOWANCE CHECK | {}ms | allowance={}", t_allow.elapsed().as_millis(), allowance));
                 }
-            }
-            
-            if allowance < amount_wei {
-                emit_log("WARNING", format!("🛡️ Auto-Approve required for {:?} (allowance: {})", wallet_addr, allowance));
                 
-                // Construct Approve Transaction INSTEAD of Swap
-                let erc20_dummy = IERC20::new(t_in, Arc::new(Provider::new(Http::new(Url::parse("http://localhost").unwrap()))));
-                let data = erc20_dummy.approve(router, U256::max_value()).tx.data().cloned().unwrap();
-                
-                let tx = TransactionRequest::new()
-                    .to(t_in)
-                    .value(0)
-                    .nonce(nonce)
-                    .data(data)
-                    .gas(100000)
-                    .gas_price(gas_gwei_to_wei(gas));
+                if allowance < amount_wei {
+                    emit_log("WARNING", format!("🛡️ Auto-Approve required for {:?} (allowance: {})", wallet_addr, allowance));
                     
-                let typed_tx: TypedTransaction = tx.into();
-                
-                if let Ok(sig) = wallet.sign_transaction_sync(&typed_tx) {
-                    let raw_tx = typed_tx.rlp_signed(&sig);
-                    let hash = parallel_broadcast(raw_tx.clone()).await;
+                    // Construct Approve Transaction INSTEAD of Swap
+                    let erc20_dummy = IERC20::new(t_in, Arc::new(Provider::new(Http::new(Url::parse("http://localhost").unwrap()))));
+                    let data = erc20_dummy.approve(router, U256::max_value()).tx.data().cloned().unwrap();
                     
-                    emit_event(EngineEvent::TxSent {
-                        tx_hash: hash.clone(),
-                        wallet: format!("{:?}", wallet_addr),
-                        action: "approve".into(),
-                        amount: 0.0,
-                        token: format!("{:?}", token),
-                        timestamp_ms: current_timestamp_ms()
-                    });
+                    let tx = TransactionRequest::new()
+                        .to(t_in)
+                        .value(0)
+                        .nonce(nonce)
+                        .data(data)
+                        .gas(100000)
+                        .gas_price(gas_gwei_to_wei(gas));
+                        
+                    let typed_tx: TypedTransaction = tx.into();
                     
-                    events.push(EngineEvent::TradeStatus {
-                        wallet: format!("{:?}", wallet_addr),
-                        action: "approve".into(),
-                        status: "Sent".into(),
-                        message: "Auto-Approve sent. Please retry SELL after confirmation.".into(),
-                        tx_hash: Some(hash),
-                        token_address: format!("{:?}", t_in),
-                        amount: 0.0,
-                        tokens_received: None,
-                        tokens_sold: None,
-                        token_decimals: dec
-                    });
+                    if let Ok(sig) = wallet.sign_transaction_sync(&typed_tx) {
+                        let raw_tx = typed_tx.rlp_signed(&sig);
+                        let hash = parallel_broadcast(raw_tx.clone()).await;
+                        
+                        // Кэшируем после успешного approve
+                        if hash.starts_with("0x") {
+                            CORE_STATE.write().unwrap().approved_tokens.insert((wallet_addr, t_in), ());
+                        }
+                        
+                        emit_event(EngineEvent::TxSent {
+                            tx_hash: hash.clone(),
+                            wallet: format!("{:?}", wallet_addr),
+                            action: "approve".into(),
+                            amount: 0.0,
+                            token: format!("{:?}", token),
+                            timestamp_ms: current_timestamp_ms()
+                        });
+                        
+                        events.push(EngineEvent::TradeStatus {
+                            wallet: format!("{:?}", wallet_addr),
+                            action: "approve".into(),
+                            status: "Sent".into(),
+                            message: "Auto-Approve sent. Please retry SELL after confirmation.".into(),
+                            tx_hash: Some(hash),
+                            token_address: format!("{:?}", t_in),
+                            amount: 0.0,
+                            tokens_received: None,
+                            tokens_sold: None,
+                            token_decimals: dec
+                        });
+                    }
+                    continue;
+                } else {
+                    // Allowance достаточен - кэшируем
+                    CORE_STATE.write().unwrap().approved_tokens.insert((wallet_addr, t_in), ());
                 }
-                continue; // Пропуск свапа для кошелька, ожидаем апрув
             }
         }
         // ===================================================================================

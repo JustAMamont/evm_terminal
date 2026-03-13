@@ -171,52 +171,52 @@ async fn prefetch_all_data(
         let q_dec = get_decimals_cached(quote).await;
         let (t0, _) = if token < quote { (token, quote) } else { (quote, token) };
         let t0_is_quote = t0 == quote;
-        let mut candidates = Vec::with_capacity(pool_targets.len());
-
-        for &addr in &pool_targets {
-            let contract = UniversalABI::new(addr, provider.clone());
-
-            // V2
-            if let Ok((r0, r1, _)) = contract.get_reserves().call().await {
-                let (d0, d1) = if t0_is_quote { (q_dec, t_dec) } else { (t_dec, q_dec) };
-                let (liq, prc) = calculate_v2_liquidity_usd_and_price(r0.into(), r1.into(), d0, d1, t0_is_quote, quote_price);
-                CORE_STATE.write().unwrap().v2_reserves.insert(addr, (r0.into(), r1.into()));
-                candidates.push(PoolCandidate { 
-                    address: addr, pool_type: "V2".into(), liquidity_usd: liq, fee_bps: 30, 
-                    sqrt_price_x96: None, tick: None, reserves: Some((r0.into(), r1.into())), 
-                    score: 0.0, spot_price: prc 
-                });
-                continue;
-            }
+        
+        // ПАРАЛЛЕЛЬНЫЙ ОПРОС ВСЕХ ПУЛОВ
+        let pool_tasks: Vec<_> = pool_targets.iter().map(|&addr| {
+            let p = provider.clone();
+            let qp = quote_price;
+            let td = t_dec;
+            let qd = q_dec;
+            let is_q = t0_is_quote;
             
-            /* V3 
-            ** NOTE **: Ликвидность для простоты в этом типе пулов берется из первого активного слота - там где цена 
-            иначе пришлось бы городить дополнительные апи запросы и усложнять алгоритм.
-            Данная реализация - компромис между точностью и производительностью. 
-
-            Этого достаточно для:
-              1. сравнения пулов (какой ликвиднее) и выбора лучшего из них
-              2. оценки примерного price impact
-
-            Для чего НЕ достаточно:
-              - Показывать точный TVL как на DexScreener к примеру */
-            if let Ok((sqrt_p, tick, _, _, _, _, _)) = contract.slot_0().call().await {
-                let liq_raw = contract.liquidity().call().await.unwrap_or(0);
-                let fee = { CORE_STATE.read().unwrap().v3_states.get(&addr).map(|s| s.pool_fee).unwrap_or(2500) };
-                let (d0, d1) = if t0_is_quote { (q_dec, t_dec) } else { (t_dec, q_dec) };
-                let (liq, prc) = calculate_v3_liquidity_usd_and_price(sqrt_p, liq_raw, d0, d1, t0_is_quote, quote_price);
-                CORE_STATE.write().unwrap().v3_states.insert(addr, V3PoolState { 
-                    liquidity: liq_raw.into(), sqrt_price_x96: sqrt_p, tick, pool_fee: fee 
-                });
-                candidates.push(PoolCandidate { 
-                    address: addr, pool_type: "V3".into(), liquidity_usd: liq, fee_bps: fee, 
-                    sqrt_price_x96: Some(sqrt_p), tick: Some(tick), reserves: None, 
-                    score: 0.0, spot_price: prc 
-                });
-            } else {
-                emit_log("WARNING", format!("⚠️ Пул {:?} не V2 и не V3", addr));
+            async move {
+                let contract = UniversalABI::new(addr, p);
+                
+                // Пробуем V2
+                if let Ok((r0, r1, _)) = contract.get_reserves().call().await {
+                    let (d0, d1) = if is_q { (qd, td) } else { (td, qd) };
+                    let (liq, prc) = calculate_v2_liquidity_usd_and_price(r0.into(), r1.into(), d0, d1, is_q, qp);
+                    CORE_STATE.write().unwrap().v2_reserves.insert(addr, (r0.into(), r1.into()));
+                    return Some(PoolCandidate { 
+                        address: addr, pool_type: "V2".into(), liquidity_usd: liq, fee_bps: 30, 
+                        sqrt_price_x96: None, tick: None, reserves: Some((r0.into(), r1.into())), 
+                        score: 0.0, spot_price: prc 
+                    });
+                }
+                
+                // Пробуем V3
+                if let Ok((sqrt_p, tick, _, _, _, _, _)) = contract.slot_0().call().await {
+                    let liq_raw = contract.liquidity().call().await.unwrap_or(0);
+                    let fee = CORE_STATE.read().unwrap().v3_states.get(&addr).map(|s| s.pool_fee).unwrap_or(2500);
+                    let (d0, d1) = if is_q { (qd, td) } else { (td, qd) };
+                    let (liq, prc) = calculate_v3_liquidity_usd_and_price(sqrt_p, liq_raw, d0, d1, is_q, qp);
+                    CORE_STATE.write().unwrap().v3_states.insert(addr, V3PoolState { 
+                        liquidity: liq_raw.into(), sqrt_price_x96: sqrt_p, tick, pool_fee: fee 
+                    });
+                    return Some(PoolCandidate { 
+                        address: addr, pool_type: "V3".into(), liquidity_usd: liq, fee_bps: fee, 
+                        sqrt_price_x96: Some(sqrt_p), tick: Some(tick), reserves: None, 
+                        score: 0.0, spot_price: prc 
+                    });
+                }
+                
+                None
             }
-        }
+        }).collect();
+        
+        let results = futures::future::join_all(pool_tasks).await;
+        let candidates: Vec<_> = results.into_iter().flatten().collect();
         
         emit_log("DEBUG", format!("📊 candidates: {}", candidates.len()));
 
@@ -229,9 +229,8 @@ async fn prefetch_all_data(
                 s.selected_pool_liquidity_usd = best.liquidity_usd;
                 s.selected_pool_spot_price = best.spot_price;
             }
-            // Получаем информацию о токене
+            
             let (token_symbol, token_name) = execution::get_token_info(token).await;
-
             let pool_type = best.pool_type.clone();
             let pool_address = best.address;
             let liquidity_usd = best.liquidity_usd;
@@ -247,7 +246,7 @@ async fn prefetch_all_data(
                 token_symbol,
                 token_name
             });
-            emit_log("DEBUG", format!(" Лучший пул: {:?}, тип: {}, Liq.: {} $, ", pool_address, pool_type, liquidity_usd));
+            emit_log("DEBUG", format!("Лучший пул: {:?}, тип: {}, Liq.: {} $", pool_address, pool_type, liquidity_usd));
         }
     }
     
@@ -823,73 +822,78 @@ pub async fn discover_pools(token: Address, quote: Address) -> Vec<Address> {
     let (v2_f, v3_f) = { let s = CORE_STATE.read().unwrap(); (s.v2_factory_address, s.v3_factory_address) };
     let rpc_urls = { RPC_POOL.read().get_fastest_pool(5) };
     
-    // === ДОБАВИТЬ ЛОГИ ===
     emit_log("DEBUG", format!("discover_pools: {} RPC URLs", rpc_urls.len()));
-    for (i, url) in rpc_urls.iter().enumerate() {
-        emit_log("DEBUG", format!("  RPC[{}]: {}...", i, &url[..50.min(url.len())]));
-    }
     
+    // Выбираем первый рабочий RPC
     let provider_http = {
         let mut result = None;
         for url in rpc_urls {
             if let Ok(u) = Url::parse(&url) {
                 let p = Arc::new(Provider::new(Http::new_with_client(u, GLOBAL_HTTP_CLIENT.clone())));
-                match timeout(Duration::from_secs(3), p.get_block_number()).await {
-                    Ok(_) => {
-                        emit_log("DEBUG", format!("RPC OK: {}", &url[..50.min(url.len())]));
-                        result = Some(p);
-                        break;
-                    }
-                    Err(_) => {
-                        emit_log("WARNING", format!("RPC TIMEOUT: {}", &url[..50.min(url.len())]));
-                    }
+                if timeout(Duration::from_secs(2), p.get_block_number()).await.is_ok() {
+                    result = Some(p);
+                    break;
                 }
             }
         }
         result
-    }; 
-    
-    let p = if let Some(provider) = provider_http { 
-        emit_log("DEBUG", "Provider selected successfully".to_string());
-        provider 
-    } else { 
-        emit_log("ERROR", "NO PROVIDER - all RPCs failed!".to_string());
-        return targets; 
     };
     
-    // === V2 ===
-    emit_log("DEBUG", format!("V2 factory: {:?}", v2_f));
-    if v2_f != Address::zero() {
-        let f = UniversalABI::new(v2_f, p.clone());
-        match f.get_pair(token, quote).call().await {
-            Ok(pair) => {
-                emit_log("DEBUG", format!("get_pair result: {:?}", pair));
-                if pair != Address::zero() { targets.push(pair); }
+    let p = match provider_http {
+        Some(provider) => provider,
+        None => {
+            emit_log("ERROR", "NO PROVIDER - all RPCs failed!".to_string());
+            return targets;
+        }
+    };
+    
+    // === ПАРАЛЛЕЛЬНЫЙ ЗАПРОС V2 + V3 ===
+    let p_v2 = p.clone();
+    let p_v3 = p.clone();
+    
+    // V2 task
+    let v2_task = async move {
+        if v2_f == Address::zero() { return None; }
+        let f = UniversalABI::new(v2_f, p_v2);
+        match timeout(Duration::from_secs(3), f.get_pair(token, quote).call()).await {
+            Ok(Ok(pair)) if pair != Address::zero() => {
+                emit_log("DEBUG", format!("V2 pool: {:?}", pair));
+                Some(pair)
             }
-            Err(e) => {
-                emit_log("ERROR", format!("get_pair error: {:?}", e));
+            _ => None
+        }
+    };
+    
+    // V3 tasks - параллельно для всех fee
+    let v3_tasks: Vec<_> = [100u32, 500, 2500, 10000].into_iter().map(|fee| {
+        let p = p_v3.clone();
+        async move {
+            if v3_f == Address::zero() { return None; }
+            let f = UniversalABI::new(v3_f, p);
+            match timeout(Duration::from_secs(3), f.get_pool(token, quote, fee).call()).await {
+                Ok(Ok(pool)) if pool != Address::zero() => {
+                    emit_log("DEBUG", format!("V3 pool fee={}: {:?}", fee, pool));
+                    CORE_STATE.write().unwrap().v3_states.insert(pool, V3PoolState { 
+                        pool_fee: fee, ..Default::default() 
+                    });
+                    Some(pool)
+                }
+                _ => None
             }
         }
+    }).collect();
+    
+    // Запускаем все параллельно
+    let (v2_result, v3_results) = futures::join!(v2_task, futures::future::join_all(v3_tasks));
+    
+    // Собираем результаты
+    if let Some(pair) = v2_result {
+        targets.push(pair);
     }
     
-    // === V3 ===
-    if v3_f != Address::zero() {
-        let f = UniversalABI::new(v3_f, p.clone());
-        for fee in [100, 500, 2500, 10000] {
-            match f.get_pool(token, quote, fee).call().await {
-                Ok(pool) => {
-                    if pool != Address::zero() { 
-                        emit_log("DEBUG", format!("V3 pool found: fee={}, addr={:?}", fee, pool));
-                        targets.push(pool); 
-                        CORE_STATE.write().unwrap().v3_states.insert(pool, V3PoolState { 
-                            pool_fee: fee, ..Default::default() 
-                        });
-                    }
-                }
-                Err(e) => {
-                    emit_log("DEBUG", format!("V3 fee {} error: {:?}", fee, e));
-                }
-            }
+    for pool_opt in v3_results {
+        if let Some(pool) = pool_opt {
+            targets.push(pool);
         }
     }
     

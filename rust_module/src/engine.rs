@@ -166,6 +166,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                     s.selected_pool_spot_price = 0.0;
                     s.v2_reserves.clear();
                     s.v3_states.clear();
+                    s.approved_tokens.clear();
                     
                     s.fuel_quote_address = q;
                     s.quote_symbol = quote_symbol.clone();
