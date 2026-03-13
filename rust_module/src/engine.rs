@@ -8,11 +8,10 @@ use std::str::FromStr;
 use crate::bridge::{EngineCommand, EngineEvent, emit_event, emit_log};
 use crate::state::{
     RUNTIME, SHUTDOWN_FLAG, CORE_STATE, RPC_POOL, RpcNode, TRACKED_WALLETS, 
-    MONITOR_HANDLE, INTERNAL_HANDLE, RPC_CHECKER_HANDLE, PNL_HANDLE
+    MONITOR_HANDLE, INTERNAL_HANDLE, RPC_CHECKER_HANDLE
 };
 use crate::monitor;
 use crate::execution;
-use crate::pnl;
 
 pub static COMMAND_TX: Lazy<mpsc::UnboundedSender<EngineCommand>> = Lazy::new(|| {
     let (tx, rx) = mpsc::unbounded_channel::<EngineCommand>();
@@ -39,7 +38,6 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 
                 if let Some(h) = MONITOR_HANDLE.lock().unwrap().take() { h.abort(); }
                 if let Some(h) = INTERNAL_HANDLE.lock().unwrap().take() { h.abort(); }
-                if let Some(h) = PNL_HANDLE.lock().unwrap().take() { h.abort(); }
                 if let Some(h) = RPC_CHECKER_HANDLE.lock().unwrap().take() { h.abort(); }
                 
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -121,8 +119,6 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 
                 let wss_bg = wss_url.clone();
                 *INTERNAL_HANDLE.lock().unwrap() = Some(RUNTIME.spawn(monitor::start_background_worker(wss_bg)).abort_handle());
-                
-                *PNL_HANDLE.lock().unwrap() = Some(RUNTIME.spawn(pnl::start_pnl_worker()).abort_handle());
                 
                 emit_event(EngineEvent::EngineReady);
                 emit_event(EngineEvent::ConnectionStatus {
@@ -441,7 +437,6 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 SHUTDOWN_FLAG.store(true, Ordering::Relaxed); 
                 if let Some(h) = MONITOR_HANDLE.lock().unwrap().take() { h.abort(); }
                 if let Some(h) = INTERNAL_HANDLE.lock().unwrap().take() { h.abort(); }
-                if let Some(h) = PNL_HANDLE.lock().unwrap().take() { h.abort(); }
                 if let Some(h) = RPC_CHECKER_HANDLE.lock().unwrap().take() { h.abort(); }
                 break;
             }

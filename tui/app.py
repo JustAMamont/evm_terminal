@@ -1802,3 +1802,4 @@ class TradingApp(App):
             except Exception as e:
                 await log.error(f"Notification watcher error: {e}")
                 await asyncio.sleep(0.1)
+

@@ -6,7 +6,6 @@ mod engine;
 mod monitor;
 mod execution;
 mod crypto;
-mod pnl;
 mod config;
 
 #[pymodule]

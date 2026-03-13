@@ -13,6 +13,3 @@ pub static INTERNAL_HANDLE: Lazy<Arc<Mutex<Option<AbortHandle>>>> = Lazy::new(||
 
 // Хендл для RPC Health Checker
 pub static RPC_CHECKER_HANDLE: Lazy<Arc<Mutex<Option<AbortHandle>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
-
-// Хендл для PnL калькулятора
-pub static PNL_HANDLE: Lazy<Arc<Mutex<Option<AbortHandle>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
