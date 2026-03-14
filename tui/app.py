@@ -25,7 +25,8 @@ from utils.aiologger import log, LogLevel
 from bot.cache import GlobalCache
 from bot.core.bridge import BridgeManager, EngineCommand, AutoFuelSettings
 from bot.core.config import Config
-from tui.help import HELP_TEXT
+from tui.help import get_help_text
+from tui.lang import t, set_language, get_language
 
 try:
     import dexbot_core
@@ -120,7 +121,7 @@ class TxStatusTracker:
         if tx_info['action'] == 'buy' and status == 1:
             position_key = f"{tx_info['wallet']}:{tx_info['token']}"
             if position_key not in self._positions:
-                self._positions[position_key] =[]
+                self._positions[position_key] = []
             self._positions[position_key].append({
                 'amount': tx_info['amount'],
                 'tx_hash': tx_hash,
@@ -132,7 +133,7 @@ class TxStatusTracker:
     
     def get_position(self, wallet: str, token: str) -> List[Dict[str, Any]]:
         position_key = f"{wallet.lower()}:{token.lower()}"
-        return self._positions.get(position_key,[])
+        return self._positions.get(position_key, [])
     
     def get_total_bought(self, wallet: str, token: str) -> float:
         positions = self.get_position(wallet, token)
@@ -208,32 +209,25 @@ class StatusConnection(Static):
 # ===================== MAIN APP =====================
 
 class TradingApp(App):
-    """
-    EVM Trader TUI Application - Reactive version with WebSocket
-    Instant updates for balances, gas prices, and pool states
-    + TX Status Tracking with latency measurement
-    + DCA positioning + Sell 100% of bought tokens
-    """
-
     CSS_PATH = "app.css"
     
     BINDINGS = [
         Binding("up", "change_mode('BUY')", "Buy", show=False, priority=True),
         Binding("down", "change_mode('SELL')", "Sell", show=False, priority=True),
         Binding("ctrl+q, ctrl+й", "quit", "Quit", priority=True),
-        Binding("ctrl+r, ctrl+к", "reload_wallets", "Reload wallets", priority=True),
+        Binding("ctrl+r, ctrl+к", "reload_wallets", "WReload", priority=True),
         Binding("ctrl+s, ctrl+ы", "save_settings", "Save", show=False, priority=True),
-        Binding("delete", "clear_token_input", "Clear token", show=False, priority=True),
+        Binding("delete", "clear_token_input", "Clear", show=False, priority=True),
         Binding("t, е", "switch_tab('trade_tab')", "Trade"),
         Binding("w, ц", "switch_tab('wallets_tab')", "Wallets"),
         Binding("s, ы", "switch_tab('settings_tab')", "Settings"),
         Binding("l, д", "switch_tab('logs_tab')", "Logs"),
         Binding("h, р", "switch_tab('help_tab')", "Help"),
         Binding("enter", "execute_trade", "Execute", show=False, priority=True),
-        Binding("shift+up", "change_slippage(0.5)", "Slippage +0.5%", show=False),
-        Binding("shift+down", "change_slippage(-0.5)", "Slippage -0.5%", show=False),
-        Binding("shift+right", "change_gas(0.1)", "Gas +0.1 Gwei", show=False),
-        Binding("shift+left", "change_gas(-0.1)", "Gas -0.1 Gwei", show=False),
+        Binding("shift+up", "change_slippage(0.5)", "Slip+", show=False),
+        Binding("shift+down", "change_slippage(-0.5)", "Slip-", show=False),
+        Binding("shift+right", "change_gas(0.1)", "Gas+", show=False),
+        Binding("shift+left", "change_gas(-0.1)", "Gas-", show=False),
     ]
 
     def __init__(
@@ -255,7 +249,7 @@ class TradingApp(App):
         self.ui_update_queue = asyncio.Queue()
         self._rich_log_handler: Optional[TextualRichLogHandler] = None
         
-        self._background_tasks: List[asyncio.Task] =[]
+        self._background_tasks: List[asyncio.Task] = []
         self._tx_tracker = TxStatusTracker()
         
         self._active_trade_mode = "BUY"
@@ -263,7 +257,7 @@ class TradingApp(App):
         self.current_gas_price_gwei = 1.0
         self.current_max_fee_cents: int = 10
         self.is_pool_loading = False
-        self.wallets_cache_ui: List[Dict] =[]
+        self.wallets_cache_ui: List[Dict] = []
         
         self._current_pool_info: Dict[str, Any] = {}
         self._current_token_address: Optional[str] = None
@@ -277,8 +271,11 @@ class TradingApp(App):
         self._last_calc_msg: str = ""
         self.status_update_task: Optional[asyncio.Task] = None
         self._native_balance_loaded = False
+        
+        # Language setting (load from DB or default to 'en')
+        saved_lang = self.cache.get_config().get('language', 'en')
+        set_language(saved_lang)
 
-        # Dispatcher for events from Rust core
         self._rust_event_handlers = {
             "EngineReady": self._evt_engine_ready,
             "ConnectionStatus": self._evt_connection_status,
@@ -298,14 +295,13 @@ class TradingApp(App):
             "Log": self._evt_log
         }
 
-    # ===================== LIFECYCLE LOGIC =====================
+    # ===================== LIFECYCLE =====================
 
     def on_mount(self) -> None:
         self._rich_log_handler = TextualRichLogHandler(self)
         asyncio.create_task(log.set_custom_handler(self._rich_log_handler.emit))
         
         self._init_ui_defaults()
-        
         self.wallets_cache_ui = self.cache.get_all_wallets(enabled_only=False)
         
         self._background_tasks = [
@@ -319,7 +315,6 @@ class TradingApp(App):
         self.ui_update_queue.put_nowait("wallets")
         self._init_market_data_table()
         
-        # Set focus on token input field
         try:
             token_input = self.query_one("#token_input", Input)
             self.set_focus(token_input)
@@ -336,7 +331,7 @@ class TradingApp(App):
         if self._amount_debounce_task:
             self._amount_debounce_task.cancel()
 
-    # ===================== HELPER METHODS =====================
+    # ===================== HELPERS =====================
 
     def _get_empty_market_data(self) -> Dict[str, Any]:
         return {
@@ -354,26 +349,22 @@ class TradingApp(App):
         }
 
     def _get_quote_info(self) -> Tuple[str, str]:
-        """Returns (quote currency symbol, quote currency address)"""
         config = self.cache.get_config()
         quote_symbol = config.get('default_quote_currency', self.app_config.DEFAULT_QUOTE_CURRENCY)
         quote_address = self.app_config.QUOTE_TOKENS.get(quote_symbol, "")
         return quote_symbol, quote_address
 
     def _short_wallet(self, wallet: str) -> str:
-        """Shortens wallet address for display in logs"""
         if not wallet: return ""
         return f"{wallet[:6]}...{wallet[-4:]}" if len(wallet) > 10 else wallet
 
     def _update_status_widget(self, widget_class, *args, **kwargs):
-        """Safe update of status widgets without try-except duplication"""
         try:
             self.query_one(widget_class).update_content(*args, **kwargs)
         except Exception:
             pass
 
     def _trigger_wallets_refresh(self):
-        """Updates wallets cache and requests table redraw"""
         self.wallets_cache_ui = self.cache.get_all_wallets(enabled_only=False)
         self.ui_update_queue.put_nowait("wallets")
 
@@ -399,12 +390,14 @@ class TradingApp(App):
             table = self.query_one("#market_data_table", DataTable)
             table.clear()
             if not table.columns:
-                table.add_columns("Pair", "Pool", "TVL", "Price", "Bought", "Impact BUY", "Impact SELL", "PnL")
+                table.add_columns(
+                    t("th_pair"), t("th_pool"), t("th_tvl"), t("th_price"),
+                    t("th_bought"), t("th_impact_buy"), t("th_impact_sell"), t("th_pnl")
+                )
         except Exception:
             pass
 
     def _is_event_for_current_pair(self, event_token: str, event_quote: Optional[str] = None) -> bool:
-        """Checks if the event belongs to the current token/quote pair"""
         if not self._current_token_address:
             return False
         if event_token and event_token != self._current_token_address.lower():
@@ -414,7 +407,7 @@ class TradingApp(App):
                 return False
         return True
 
-    # ===================== INTERACTION EVENTS (KEYS & CLICKS) =====================
+    # ===================== EVENTS =====================
 
     def on_log_message(self, event: LogMessage) -> None:
         try:
@@ -455,7 +448,7 @@ class TradingApp(App):
         elif event.pane.id == "settings_tab":
             await self._load_and_apply_settings()
 
-    # ===================== RUST EVENT HANDLERS (DISPATCHER) =====================
+    # ===================== RUST EVENT HANDLERS =====================
 
     async def handle_rust_event(self, event: dict):
         etype = event.get("type")
@@ -472,10 +465,9 @@ class TradingApp(App):
         if self.bridge: 
             await self.bridge.send(EngineCommand.refresh_all_balances())
             
-            # Update token balances from open positions (once at startup)
             open_positions = self.cache.get_open_positions_tokens()
             if open_positions:
-                await log.info(f"🔄 Updating balances for {len(open_positions)} open positions...")
+                await log.info(f"Updating balances for {len(open_positions)} open positions...")
                 for wallet, token in open_positions:
                     await self.bridge.send(EngineCommand.refresh_balance(wallet, token))
             
@@ -548,13 +540,11 @@ class TradingApp(App):
         if token_symbol:
             self._market_data['token_symbol'] = token_symbol
             if self._current_token_address:
-                # CACHE IN MEMORY - instant access
                 self.cache.set_token_metadata_cache(
                     self._current_token_address,
                     symbol=token_symbol,
                     name=data.get('token_name')
                 )
-                # DB request in background, non-blocking
                 asyncio.create_task(
                     self.cache.db.add_or_update_recent_token(
                         self._current_token_address,
@@ -568,7 +558,6 @@ class TradingApp(App):
         self.notify(f"🏊 Pool: {data.get('pool_type')} TVL ${data.get('liquidity_usd', 0):,.0f}", severity="information", timeout=4)
         
     async def _evt_pool_error(self, data: dict):
-        await log.error(f"[POOL_ERROR] FULL DATA: {data}")
         event_token = data.get('token', '').lower()
         event_quote = data.get('quote', '').lower()
         if not self._is_event_for_current_pair(event_token, event_quote):
@@ -604,7 +593,6 @@ class TradingApp(App):
         self.ui_update_queue.put_nowait("refresh_market_data")
 
     async def _evt_pool_not_found(self, data: dict):
-        await log.error(f"[POOL_NOT_FOUND] FULL DATA: {data}")
         event_token = data.get('token', '').lower()
         event_quote = data.get('quote', '').lower()
         if not self._is_event_for_current_pair(event_token, event_quote):
@@ -627,7 +615,6 @@ class TradingApp(App):
             self.is_pool_loading = False
             self._update_trade_buttons_state()
         except Exception:
-            # Widget not found - ignoring
             self.is_pool_loading = False
             self._update_trade_buttons_state()
 
@@ -648,88 +635,47 @@ class TradingApp(App):
         self.ui_update_queue.put_nowait("refresh_market_data")
 
     async def _evt_tx_sent(self, data: dict):
-        """Handles transaction sent event"""
         tx_hash = data.get('tx_hash', '')
         wallet = data.get('wallet', '')
         action = data.get('action', '')
         amount = data.get('amount', 0)
         token = data.get('token', '')
         
-        # Record in tracker
         self._tx_tracker.record_tx_sent(tx_hash, wallet, action, amount, token)
         
         short_wallet = self._short_wallet(wallet) if wallet else "???"
         await log.info(f"<cyan>[TX SENT]</cyan> {action.upper()} {short_wallet} Hash: {tx_hash[:16]}...")
 
-
     async def _evt_tx_confirmed(self, data: dict):
-        """Handles transaction confirmation event"""
         tx_hash = data.get('tx_hash', '')
         status_raw = data.get('status', '')
         gas_used = data.get('gas_used', 0)
         
-        # Normalize status
         status = status_raw.lower() if isinstance(status_raw, str) else str(status_raw)
-        
-        # === DEBUG: Incoming data ===
-        #await log.debug(f"[TX_CONFIRMED] INCOMING | tx_hash={tx_hash[:16] if tx_hash else 'None'}... | status_raw='{status_raw}' | status_normalized='{status}' | gas_used={gas_used}")
-        
-        # Search in tracker
         tx_result = self._tx_tracker.confirm_tx(tx_hash, gas_used, 1 if status == 'success' else 0)
-        
-        # === DEBUG: Tracker search result ===
-        #if tx_result:
-        #    await log.debug(f"[TX_CONFIRMED] FOUND IN TRACKER | keys={list(tx_result.keys())}")
-        #else:
-        #    await log.debug(f"[TX_CONFIRMED] NOT IN TRACKER! tx_hash={tx_hash[:16] if tx_hash else 'None'}... | Checking all pending: {list(self._tx_tracker._pending_txs.keys())[:3]}...")
         
         if tx_result:
             latency_ms = tx_result.get('latency_ms', 0)
             action = tx_result.get('action', '')
             wallet = tx_result.get('wallet', '')
             token = tx_result.get('token', '')
-            amount = tx_result.get('amount', 0)
-            
-            # === DEBUG: Extracted values ===
-            #await log.debug(f"[TX_CONFIRMED] EXTRACTED | action='{action}' | wallet='{wallet[:10] if wallet else 'EMPTY'}' | token='{token[:10] if token else 'EMPTY'}' | amount={amount}")
             
             action_str = "Buy" if action == "buy" else "Sell" if action == "sell" else f"???({action})"
             action_emoji = "🟢" if action == "buy" else "🔴" if action == "sell" else "❓"
-            #short_wallet = self._short_wallet(wallet) if wallet else "???"
             
             if status == "success":
                 await log.success(f"<green>[TX CONFIRMED]</green> {action_str} | Latency: {latency_ms:.0f}ms")
                 self.notify(f"{action_emoji} {action_str} successful!\nLatency: {latency_ms:.0f}ms", severity="information", title=f"{action_str}")
                 
-                # === DEBUG: Position close condition check ===
-                #cond_action = action == "sell"
-                #cond_wallet = bool(wallet)
-                #cond_token = bool(token)
-                #await log.debug(f"[TX_CONFIRMED] CLOSE CONDITION | action=='sell': {cond_action} | wallet: {cond_wallet} | token: {cond_token} | ALL: {cond_action and cond_wallet and cond_token}")
-                
                 if action == "sell" and wallet and token:
-                    # Position BEFORE closing
-                    #pos_before = self.cache.get_position_memory(wallet, token)
-                    #await log.debug(f"[BEFORE CLOSE] wallet={short_wallet} | token={token[:10]}... | cost={pos_before.get('cost', 0)} | amount={pos_before.get('amount', 0)}")
-                    
-                    # Closing
                     self.cache.close_position_memory(wallet, token)
-                    
-                    # Position AFTER closing
-                    #pos_after = self.cache.get_position_memory(wallet, token)
-                    #await log.debug(f"[AFTER CLOSE] wallet={short_wallet} | token={token[:10]}... | cost={pos_after.get('cost', 0)} | amount={pos_after.get('amount', 0)}")
-                    
-                    # Reset impact
                     self._market_data['impact_sell'] = 0.0
                     self.ui_update_queue.put_nowait("refresh_market_data")
-                #else:
-                #    await log.debug(f"[TX_CONFIRMED] NOT CLOSING POSITION | reason: action='{action}' (need 'sell'), wallet={'SET' if wallet else 'EMPTY'}, token={'SET' if token else 'EMPTY'}")
             else:
                 await log.error(f"<red>[TX FAILED]</red> {action_str} | Latency: {latency_ms:.0f}ms")
                 self.notify(f"❌ {action_str} failed!\nLatency: {latency_ms:.0f}ms", severity="error", title=f"{action_str}")
         else:
-            # Transaction not found in tracker - possible restart or missed TxSent
-            await log.warning(f"<yellow>[TX_CONFIRMED]</yellow> tx_hash={tx_hash[:16] if tx_hash else 'None'}... NOT FOUND in tracker (restart or missed TxSent?)")
+            await log.warning(f"<yellow>[TX_CONFIRMED]</yellow> tx_hash={tx_hash[:16] if tx_hash else 'None'}... NOT FOUND in tracker")
 
     async def _evt_autofuel_error(self, data: dict):
         reason = data.get("reason", "unknown_error")
@@ -749,7 +695,6 @@ class TradingApp(App):
             await log.info(msg)
 
     async def _handle_trade_status(self, data: dict):
-        """Handles trade status from Rust core"""
         wallet = data.get('wallet', '')
         status = data.get('status', '').lower()
         action = data.get('action', '').lower()
@@ -770,14 +715,12 @@ class TradingApp(App):
         explorer_url = f"{self.app_config.EXPLORER_URL}tx/{tx_hash}" if tx_hash else ""
         
         if status == "sent":
-            # Only update position, DO NOT reset data!
             if token_address and wallet:
                 await self._update_position_memory_on_send(
                     action, wallet, token_address, amount, 
                     tokens_received, tokens_sold, token_decimals
                 )
             self.ui_update_queue.put_nowait("refresh_balances")
-            # WITHOUT resetting sell_impact, pos_amount, PnL
             
         elif status == "success":
             tx_result = self._tx_tracker.confirm_tx(tx_hash, gas_used, 1)
@@ -786,7 +729,6 @@ class TradingApp(App):
             await log.success(f"<green>[TX SUCCESS]</green> {action_str} {short_wallet} | Latency: {latency_ms:.0f}ms | {explorer_url}")
             self.notify(f"{action_emoji} {action_str} successful!\nLatency: {latency_ms:.0f}ms", severity="information", title=f"{action_str}", timeout=4)
             
-            # Reset ONLY after successful sell confirmation
             if action == "sell" and token_address and wallet:
                 self.cache.close_position_memory(wallet, token_address)
                 self._market_data['impact_sell'] = 0.0
@@ -809,7 +751,6 @@ class TradingApp(App):
             
             self.notify(f"❌ {action_str} failed!\n{error_message[:80] if error_message else 'Unknown error'}", severity="error", title=f"{action_str}", timeout=8)
             
-            # Restore balance on sell error
             if action == "sell" and token_address and wallet and tokens_sold:
                 try:
                     sold_wei = int(tokens_sold)
@@ -819,7 +760,6 @@ class TradingApp(App):
                     pass
 
     async def _update_position_memory_on_send(self, action: str, wallet: str, token_address: str, amount: float, tokens_received, tokens_sold, token_decimals: int):
-        """Updating position on transaction send"""
         short_wallet = self._short_wallet(wallet)
         
         if action == "buy":
@@ -827,8 +767,6 @@ class TradingApp(App):
                 _, quote_address = self._get_quote_info()
                 quote_decimals = self.cache.get_token_decimals(quote_address) or 18
                 cost_wei = int(float(amount) * (10**quote_decimals))
-                
-                #await log.debug(f"[BUY] cost_wei={cost_wei} | quote_decimals={quote_decimals} | amount={amount}")
                 
                 self.cache.update_position_memory(wallet, token_address, cost_wei, 0)
                 
@@ -936,7 +874,6 @@ class TradingApp(App):
                         
                         token_symbol = "TOKEN"
                         try:
-                            # FROM CACHE - instantly, without DB
                             meta = self.cache.get_token_metadata_cached(active_token)
                             if meta and meta.get('symbol'): 
                                 token_symbol = meta['symbol']
@@ -946,9 +883,8 @@ class TradingApp(App):
                         pool_status = self._get_pool_status_display(active_token)
                         metadata_display.update(f"Token Info:[bold cyan]{token_symbol}[/] {pool_status}")
                     else:
-                        metadata_display.update("Token Info: [dim]None[/]")
+                        metadata_display.update(t("token_info_none"))
                 except Exception:
-                    # Widget not on current screen - ignoring
                     pass
 
                 self._update_trade_buttons_state()
@@ -995,18 +931,17 @@ class TradingApp(App):
             self.is_pool_loading = True
             return "[yellow](Searching...)[/]"
 
-    # ===================== UI CALLBACKS (ON) =====================
+    # ===================== UI CALLBACKS =====================
 
     async def _update_token_pair_display(self):
         try:
             metadata_display = self.query_one("#token_metadata_display", Static)
             if not self._current_token_address:
-                metadata_display.update("Token Info: [dim]None[/]")
+                metadata_display.update(t("token_info_none"))
                 return
             
             token_symbol = self._market_data.get('token_symbol', 'TOKEN')
             if token_symbol == 'TOKEN':
-                # FROM CACHE - instantly, without DB
                 meta = self.cache.get_token_metadata_cached(self._current_token_address)
                 if meta and meta.get('symbol'):
                     token_symbol = meta['symbol']
@@ -1069,7 +1004,7 @@ class TradingApp(App):
                 self.query_one("#market_data_table", DataTable).clear()
             except Exception: pass
             
-            self.query_one("#token_metadata_display", Static).update("Token Info: [dim]None[/]")
+            self.query_one("#token_metadata_display", Static).update(t("token_info_none"))
             self._update_trade_buttons_state()
             
             if self.bridge and token_to_unsubscribe:
@@ -1088,11 +1023,6 @@ class TradingApp(App):
         quote_symbol = str(self.query_one("#trade_quote_select").value)
         quote_address = self.app_config.QUOTE_TOKENS.get(quote_symbol, "")
         
-        # await log.debug(f"[SWITCH_TOKEN] token={token_address[:16]}... | quote_symbol={quote_symbol} | quote_address={quote_address[:16] if quote_address else 'NONE'}...")
-        # await log.debug(f"[SWITCH_TOKEN] v2_factory={self.app_config.V2_FACTORY_ADDRESS}")
-        # await log.debug(f"[SWITCH_TOKEN] rpc_url={self.app_config.RPC_URL[:50]}...")
-        
-        # Save quote for filtering
         self._current_quote_address = quote_address.lower() if quote_address else None
 
         if self.bridge: 
@@ -1115,7 +1045,6 @@ class TradingApp(App):
         await self._trigger_impact_calc()
 
     async def _trigger_impact_calc(self):
-        """Recalculates BOTH impacts regardless of the current mode"""
         if not self._current_token_address: return
 
         try:
@@ -1134,14 +1063,12 @@ class TradingApp(App):
             quote_address = self.app_config.QUOTE_TOKENS.get(quote_symbol, "")
             
             if self.bridge:
-                # === ALWAYS calculate BUY impact ===
                 if final_amount > 0:
                     await self.bridge.send(EngineCommand.calc_impact(
                         token_address=self._current_token_address, quote_address=quote_address,
                         amount_in=final_amount, is_buy=True
                     ))
                 
-                # === ALWAYS calculate SELL impact ===
                 wallets_to_trade = [w['address'] for w in self.wallets_cache_ui if w.get('enabled')]
                 total_tokens_wei = sum(self.cache.get_exact_balance_wei(w, self._current_token_address) or 0 for w in wallets_to_trade)
                 token_dec = self.cache.get_token_decimals(self._current_token_address) or 18
@@ -1153,7 +1080,6 @@ class TradingApp(App):
                         amount_in=amount_to_sell, is_buy=False
                     ))
                 else:
-                    # No tokens - reset sell impact
                     self._market_data['impact_sell'] = 0.0
                     self.ui_update_queue.put_nowait("refresh_market_data")
         except Exception: pass
@@ -1163,7 +1089,6 @@ class TradingApp(App):
         quote_symbol = str(event.value)
         quote_address = self.app_config.QUOTE_TOKENS.get(quote_symbol, "")
         
-        # FIRST update quote - filter will start working immediately
         self._current_quote_address = quote_address.lower() if quote_address else None
         
         await self.cache.update_config({"default_quote_currency": quote_symbol})
@@ -1302,7 +1227,6 @@ class TradingApp(App):
         
         if total_tokens_wei > 0:
             final_amount = total_tokens_wei / (10**decimals)
-            # FROM CACHE - instantly, without await and DB
             meta = self.cache.get_token_metadata_cached(token_address)
             display_symbol = meta.get('symbol', 'TOKEN') if meta else "TOKEN"
             return final_amount, display_symbol
@@ -1354,13 +1278,12 @@ class TradingApp(App):
         if self._active_trade_mode == "SELL":
             final_amount, display_symbol = await self._prepare_sell_data(token_address, wallets_to_trade, amounts_wei_dict)
             if final_amount <= 0:
-                return self.notify("No tokens to sell. Check cache and DB.", severity="error")
+                return self.notify("No tokens to sell.", severity="error")
         else:
             final_amount, display_symbol = await self._prepare_buy_data(wallets_to_trade, quote_symbol, quote_address)
             if final_amount <= 0:
-                return self.notify("Amount is 0 or calculation error.", severity="error", timeout=5)
+                return self.notify("Amount is 0.", severity="error", timeout=5)
             
-            # === QUOTE TOKEN BALANCE CHECK ===
             quote_address_lower = quote_address.lower()
             total_quote_balance = 0.0
             for w_addr in wallets_to_trade:
@@ -1369,10 +1292,8 @@ class TradingApp(App):
             if final_amount > total_quote_balance:
                 err_msg = f"Insufficient {quote_symbol}: need {final_amount:.6f}, have {total_quote_balance:.6f}"
                 await log.error(err_msg)
-                return self.notify(err_msg, severity="error", timeout=5
-            )
+                return self.notify(err_msg, severity="error", timeout=5)
             
-            # === NATIVE CURRENCY BALANCE CHECK FOR GAS ===
             native_address = self.app_config.NATIVE_CURRENCY_ADDRESS.lower()
             native_symbol = self.app_config.NATIVE_CURRENCY_SYMBOL
             min_gas = self.app_config.MIN_NATIVE_FOR_GAS
@@ -1406,7 +1327,7 @@ class TradingApp(App):
                 amounts_wei=amounts_wei_dict
             ))
 
-    # ===================== ACTIONS (HOTKEYS) =====================
+    # ===================== ACTIONS =====================
 
     def action_change_slippage(self, change: float):
         self.current_slippage = max(0.1, self.current_slippage + change)
@@ -1436,7 +1357,6 @@ class TradingApp(App):
         except Exception: pass
 
     def action_switch_tab(self, tab_id: str):
-        # Do not switch if focus is on Input or Select
         focused = self.focused
         if focused:
             focused_type = type(focused).__name__
@@ -1451,7 +1371,7 @@ class TradingApp(App):
 
     def _update_panel_visuals(self):
         try:
-            for panel_id, mode in[("buy_panel", "BUY"), ("sell_panel", "SELL")]:
+            for panel_id, mode in [("buy_panel", "BUY"), ("sell_panel", "SELL")]:
                 self.query_one(f"#{panel_id}").set_class(self._active_trade_mode == mode, "active-panel")
         except Exception: pass
 
@@ -1476,7 +1396,6 @@ class TradingApp(App):
             token_symbol = self._market_data.get('token_symbol', 'TOKEN')
             pair_str = f"{token_symbol}/{quote_symbol}" if pool_type != '-' else "-"
             
-            # Formatting bought volume
             if pos_amount > 0:
                 if pos_amount >= 1000000:
                     bought_str = f"{pos_amount/1000000:.2f}M"
@@ -1541,7 +1460,7 @@ class TradingApp(App):
                     self.cache.set_active_trade_amount_for_quote(None)
                     return
 
-                active_wallets =[w for w in self.wallets_cache_ui if w.get('enabled')]
+                active_wallets = [w for w in self.wallets_cache_ui if w.get('enabled')]
                 total_balance = sum(self.cache.get_wallet_balances(w['address']).get(quote_address.lower(), 0.0) for w in active_wallets)
                 final_amount = total_balance * (pct / 100.0)
                 if pct == 100: final_amount *= 0.999
@@ -1572,7 +1491,7 @@ class TradingApp(App):
             
             wallets_table.clear()
             if not wallets_table.columns: 
-                wallets_table.add_columns("Name", "Address", "Status (Click)")
+                wallets_table.add_columns(t("th_name"), t("address"), t("th_status"))
 
             for w in self.wallets_cache_ui:
                 status_render = Text("▣ Active", style="bold green") if w.get('enabled') else Text("▢ Disabled", style="dim white")
@@ -1590,7 +1509,7 @@ class TradingApp(App):
             quote_address = quote_address.lower()
             
             balances_table.columns.clear()
-            balances_table.add_columns("Wallet", f"{native_symbol}(fee)", f"{quote_symbol}(quote)")
+            balances_table.add_columns(t("th_wallet"), f"{native_symbol}(fee)", f"{quote_symbol}(quote)")
             
             for w in self.wallets_cache_ui:
                 if w.get('enabled'):
@@ -1616,6 +1535,10 @@ class TradingApp(App):
             self.current_slippage = float(config.get('slippage', 15.0))
             self.current_gas_price_gwei = float(config.get('default_gas_price_gwei', 1.0))
             self.query_one("#amount_input").value = str(config.get('default_trade_amount', '0.01'))
+            
+            saved_lang = config.get('language', 'en')
+            set_language(saved_lang)
+            self.query_one("#setting_language_select").value = saved_lang
         except Exception as e:
             await log.error(f"TUI CRITICAL: Failed to load settings into widgets: {e}")
             self.notify("Critical error loading settings!", severity="error", timeout=10)
@@ -1633,6 +1556,9 @@ class TradingApp(App):
             new_rpc = self.query_one("#setting_rpc_url_input").value.strip()
             rpc_changed = new_rpc != current_rpc
             
+            new_lang = str(self.query_one("#setting_language_select").value)
+            lang_changed = new_lang != get_language()
+            
             await self.cache.update_config({
                 'rpc_url': new_rpc, 
                 'default_quote_currency': quote_symbol, 
@@ -1642,9 +1568,10 @@ class TradingApp(App):
                 'gas_limit': int(self.query_one("#setting_gas_limit_input").value or "350000"), 
                 'auto_fuel_enabled': fuel_enabled,
                 'auto_fuel_threshold': fuel_threshold, 
-                'auto_fuel_amount': fuel_amount
+                'auto_fuel_amount': fuel_amount,
+                'language': new_lang
             })
-            
+            # Reload
             if self.bridge:
                 await self.bridge.send(EngineCommand.update_settings(
                     gas_price_gwei=self.current_gas_price_gwei, 
@@ -1654,8 +1581,9 @@ class TradingApp(App):
                     quote_symbol=quote_symbol 
                 ))
                 
-            if rpc_changed:
-                self.notify("RPC changed. Restarting...", severity="warning", timeout=3)
+            if rpc_changed or lang_changed:
+                reason = "RPC" if rpc_changed else "Language"
+                self.notify(f"{reason} changed. Restarting...", severity="warning", timeout=3)
                 await asyncio.sleep(1)
                 self.exit(result="RESTART_SAME_NETWORK")
             else:
@@ -1694,82 +1622,84 @@ class TradingApp(App):
                 yield StatusWallets("Wallets: -")
                 
         with TabbedContent(initial="trade_tab", id="main_tabs"):
-            with TabPane("📊 Trade", id="trade_tab"):
+            with TabPane(t("tab_trade"), id="trade_tab"):
                 with VerticalScroll(id="main_trade_scroller"):
                     with Horizontal(id="input_row_container"):
                         with Vertical(id="token_input_group"):
                             with Horizontal(classes="label-row"):
-                                yield Label(" Pair:", classes="input-label")
-                                yield Static("Token Info: [dim]None[/]", id="token_metadata_display")
-                            yield Input(placeholder="Paste token address", id="token_input", validators=[AddressValidator()])
+                                yield Label(t("pair"), classes="input-label")
+                                yield Static(t("token_info_none"), id="token_metadata_display")
+                            yield Input(placeholder=t("placeholder_token"), id="token_input", validators=[AddressValidator()])
                         
                         with Vertical(id="amount_input_group"):
-                            yield Button("💡 Suggestion", id="better_pool_suggestion", variant="warning")
-                            yield Label(" Amount / Currency:", classes="input-label")
+                            yield Button(t("suggestion"), id="better_pool_suggestion", variant="warning")
+                            yield Label(t("amount_currency"), classes="input-label")
                             with Horizontal(classes="input-row"):
                                 yield Input(id="amount_input", validators=[AmountValidator()], classes="half-width-input")
                                 yield Select(options=[], id="trade_quote_select", classes="half-width-select")
                     
                     with Horizontal(id="trade_panels_container"):
                         with Vertical(id="buy_panel", classes="active-panel"):
-                            yield Label("BUY", classes="trade-panel-title")
-                            yield Button("BUY", variant="success", id="buy_button", disabled=True)
+                            yield Label(t("buy"), classes="trade-panel-title")
+                            yield Button(t("buy"), variant="success", id="buy_button", disabled=True)
                         with Vertical(id="sell_panel"):
-                            yield Label("SELL (100%)", classes="trade-panel-title")
-                            yield Button("SELL", variant="error", id="sell_button", disabled=True)
+                            yield Label(t("sell_full"), classes="trade-panel-title")
+                            yield Button(t("sell"), variant="error", id="sell_button", disabled=True)
                     
-                    yield Label("📊 Market data:", id="market_data_label")
+                    yield Label(t("market_data"), id="market_data_label")
                     yield DataTable(id="market_data_table")
-                    yield Label("💼 Active wallets:", id="balances_label")
+                    yield Label(t("active_wallets"), id="balances_label")
                     yield DataTable(id="balances_table")
             
-            with TabPane("👛 Wallets", id="wallets_tab"):
+            with TabPane(t("tab_wallets"), id="wallets_tab"):
                 with VerticalScroll(id="wallets_scroll_container"):
                     yield DataTable(id="wallets_table")
                     with Vertical(id="add_wallet_form"):
-                        yield Label("Add wallet:", classes="form-title")
-                        yield Input(placeholder="Name", id="new_wallet_name_input")
-                        yield Input(placeholder="Private key", id="new_wallet_pk_input", password=True)
-                        yield Button("Save", variant="success", id="save_new_wallet_button")
+                        yield Label(t("add_wallet"), classes="form-title")
+                        yield Input(placeholder=t("placeholder_name"), id="new_wallet_name_input")
+                        yield Input(placeholder=t("placeholder_pk"), id="new_wallet_pk_input", password=True)
+                        yield Button(t("save"), variant="success", id="save_new_wallet_button")
                 with Horizontal(classes="table-buttons"):
-                    yield Button("Delete selected", id="delete_wallet_button", variant="error")
+                    yield Button(t("delete_selected"), id="delete_wallet_button", variant="error")
             
-            with TabPane("⚙️ Settings", id="settings_tab"):
+            with TabPane(t("tab_settings"), id="settings_tab"):
                 with VerticalScroll(id="settings_scroll_container"):
                     with Vertical(classes="settings-group"):
-                        yield Label("Main settings", classes="settings-title")
-                        yield Label(" RPC URL:", classes="input-label")
+                        yield Label(t("main_settings"), classes="settings-title")
+                        yield Label(f" {t('language')}:", classes="input-label")
+                        yield Select(options=[("English", "en"), ("Русский", "ru")], id="setting_language_select", value=get_language())
+                        yield Label(f" {t('rpc_url')}:", classes="input-label")
                         yield Input(id="setting_rpc_url_input", validators=[URL()])
-                        yield Label(" Stablecoin (Quote):", classes="input-label")
+                        yield Label(f" {t('stablecoin_quote')}:", classes="input-label")
                         quote_tokens = list(self.app_config.QUOTE_TOKENS.keys())
                         yield Select(options=[(token, token) for token in sorted(quote_tokens)], id="setting_quote_currency_select")
                     
                     with Vertical(classes="settings-group"):
-                        yield Label("⛽ Auto-Fuel", classes="settings-title")
-                        yield Label("Enable auto-fuel:", classes="input-label")
-                        yield Select(options=[("Off", "False"), ("On", "True")], id="setting_autofuel_enable", value="False")
-                        yield Label(f"Threshold ({self.app_config.NATIVE_CURRENCY_SYMBOL}):", classes="input-label")
+                        yield Label(t("autofuel_title"), classes="settings-title")
+                        yield Label(f" {t('autofuel_enable')}:", classes="input-label")
+                        yield Select(options=[(t("autofuel_off"), "False"), (t("autofuel_on"), "True")], id="setting_autofuel_enable", value="False")
+                        yield Label(f" Threshold ({self.app_config.NATIVE_CURRENCY_SYMBOL}):", classes="input-label")
                         yield Input(id="setting_autofuel_threshold", placeholder="0.005", validators=[FloatValidator()])
-                        yield Label(f"Amount to buy ({self.app_config.NATIVE_CURRENCY_SYMBOL}):", classes="input-label")
+                        yield Label(f" Amount ({self.app_config.NATIVE_CURRENCY_SYMBOL}):", classes="input-label")
                         yield Input(id="setting_autofuel_amount", placeholder="0.02", validators=[FloatValidator()])
                     
                     with Vertical(classes="settings-group"):
-                        yield Label("Transaction settings", classes="settings-title")
-                        yield Label(" Gas Price (Gwei):", classes="input-label")
+                        yield Label(t("tx_settings"), classes="settings-title")
+                        yield Label(f" {t('gas_price')}:", classes="input-label")
                         yield Input(id="setting_gas_price_input", validators=[FloatValidator()])
-                        yield Label(" Slippage (%):", classes="input-label")
+                        yield Label(f" {t('slippage')}:", classes="input-label")
                         yield Input(id="setting_slippage_input", validators=[FloatValidator()])
-                        yield Label(" Trade amount:", classes="input-label")
+                        yield Label(f" {t('trade_amount')}:", classes="input-label")
                         yield Input(id="setting_trade_amount_input", validators=[AmountValidator()])
-                        yield Label(" Gas Limit:", classes="input-label")
+                        yield Label(f" {t('gas_limit')}:", classes="input-label")
                         yield Input(id="setting_gas_limit_input", validators=[IntegerValidator()])
             
-            with TabPane("📋 Logs", id="logs_tab"):
+            with TabPane(t("tab_logs"), id="logs_tab"):
                 yield RichLog(id="log_output", wrap=True, highlight=True)
             
-            with TabPane("❓ Help", id="help_tab"):
+            with TabPane(t("tab_help"), id="help_tab"):
                 with VerticalScroll():   
-                    yield Markdown(HELP_TEXT, id="help_markdown")
+                    yield Markdown(get_help_text(get_language()), id="help_markdown")
         yield Footer()
 
     async def _notification_watcher(self) -> None:

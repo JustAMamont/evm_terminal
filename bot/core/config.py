@@ -51,8 +51,7 @@ class Config:
 
     def _generate_tickers(self) -> List[str]:
         """
-        Формирует список тикеров на основе quote_tokens из JSON, 
-        для запроса цены квотируемого токена к доллару у бинанса
+        Generates a list of tickers based on quote_tokens from JSON to request the price of the quoted token to the dollar from Binance.
         """
         tickers = set()
         

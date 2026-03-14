@@ -1,5 +1,3 @@
-import sys
-
 try:
     import dexbot_core
 except ImportError:
@@ -7,7 +5,7 @@ except ImportError:
 
 def load_resource_bundle(bundle_name: str) -> dict:
     """
-    Загружает конфигурацию сети напрямую из защищенного Rust-ядра.
+    Loads network configuration directly from the secure Rust kernel.
     """
     if not dexbot_core:
         raise RuntimeError("CRITICAL: Secure Core (dexbot_core) not found. Cannot load network config.")
@@ -22,7 +20,7 @@ def load_resource_bundle(bundle_name: str) -> dict:
 
 def enumerate_adapters() -> list:
     """
-    Возвращает список доступных сетей из Rust-ядра.
+    Returns a list of available networks from the Rust kernel.
     """
     if not dexbot_core:
         print("WARNING: dexbot_core not loaded, no networks available.")

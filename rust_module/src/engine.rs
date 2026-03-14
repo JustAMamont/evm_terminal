@@ -25,7 +25,7 @@ fn bnb_to_wei(bnb: f64) -> U256 {
 }
 
 async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
-    emit_log("SUCCESS", "Rust Engine Core: Active".into());
+    emit_log("SUCCESS", "[Core.Engine] Active".into());
     
     while let Some(cmd) = rx.recv().await {
         match cmd {
@@ -104,7 +104,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 
                 if fuel_enabled {
                     emit_log("INFO", format!(
-                        "⛽ Auto-Fuel включен: порог={:.6}, amount={:.6}, quote={:?}", 
+                        "[Core.Engine] ⛽ Auto-Fuel is on: порог={:.6}, amount={:.6}, quote={:?}", 
                         fuel_settings.auto_fuel_threshold,
                         fuel_settings.auto_fuel_amount,
                         fuel_quote_address
@@ -112,7 +112,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 }
                 
                 if !quote_symbol.is_empty() {
-                    emit_log("INFO", format!("💱 Quote symbol установлен: {}", quote_symbol));
+                    emit_log("INFO", format!("[Core.Engine] 💱 The quoted symbol is set: {}", quote_symbol));
                 }
                 
                 *RPC_CHECKER_HANDLE.lock().unwrap() = Some(RUNTIME.spawn(monitor::rpc_health_checker(all_urls)).abort_handle());
@@ -123,17 +123,17 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 emit_event(EngineEvent::EngineReady);
                 emit_event(EngineEvent::ConnectionStatus {
                     connected: true,
-                    message: "Ядро инициализировано".into()
+                    message: "The kernel has been initialized.".into()
                 });
             }
 
             EngineCommand::SwitchToken { token_address, quote_address, quote_symbol } => {
-                emit_log("INFO", format!("[Rust] SwitchToken START: token={}, quote={}", token_address, quote_address));
+                emit_log("INFO", format!("[Core.Engine] SwitchToken START: token={}, quote={}", token_address, quote_address));
                 
                 let t = match Address::from_str(&token_address) {
                     Ok(addr) => addr,
                     Err(e) => {
-                        emit_log("ERROR", format!("[Rust] SwitchToken: invalid token address: {}", e));
+                        emit_log("ERROR", format!("[Core.Engine] SwitchToken: invalid token address: {}", e));
                         return;
                     }
                 };
@@ -141,7 +141,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 let q = match Address::from_str(&quote_address) {
                     Ok(addr) => addr,
                     Err(e) => {
-                        emit_log("ERROR", format!("[Rust] SwitchToken: invalid quote address: {}", e));
+                        emit_log("ERROR", format!("[Core.Engine] SwitchToken: invalid quote address: {}", e));
                         return;
                     }
                 };
@@ -151,7 +151,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                     s.quote_tokens.iter().map(|(k, v)| (k.clone(), *v)).collect()
                 };
                 
-                emit_log("INFO", format!("[Rust] SwitchToken: all_quotes count={}", all_quotes.len()));
+                emit_log("INFO", format!("[Core.Engine] SwitchToken: all_quotes count={}", all_quotes.len()));
                 
                 {
                     let mut s = CORE_STATE.write().unwrap();
@@ -166,31 +166,31 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                     
                     s.fuel_quote_address = q;
                     s.quote_symbol = quote_symbol.clone();
-                    crate::bridge::emit_log("INFO", format!("[Rust] SwitchToken: quote set to {} ({})", quote_symbol, quote_address));
+                    crate::bridge::emit_log("INFO", format!("[Core.Engine] SwitchToken: quote set to {} ({})", quote_symbol, quote_address));
                 }
                 
-                crate::bridge::emit_log("INFO", "[Rust] SwitchToken: spawning check_and_auto_approve_background".into());
+                crate::bridge::emit_log("INFO", "[Core.Engine] SwitchToken: spawning check_and_auto_approve_background".into());
                 RUNTIME.spawn(async move {
                     execution::check_and_auto_approve_background(t, q).await;
                 });
 
                 if let Some(old) = MONITOR_HANDLE.lock().unwrap().take() { 
                     old.abort(); 
-                    crate::bridge::emit_log("INFO", "[Rust] SwitchToken: old monitor aborted".into());
+                    crate::bridge::emit_log("INFO", "[Core.Engine] SwitchToken: old monitor aborted".into());
                 }
                 
                 let wss = { CORE_STATE.read().unwrap().wss_url.clone() };
-                crate::bridge::emit_log("INFO", format!("[Rust] SwitchToken: starting monitor, wss={}", wss));
+                crate::bridge::emit_log("INFO", format!("[Core.Engine] SwitchToken: starting monitor, wss={}", wss));
                 
                 let handle = RUNTIME.spawn(monitor::start_unified_websocket_monitor(wss, t, q, all_quotes));
                 *MONITOR_HANDLE.lock().unwrap() = Some(handle.abort_handle());
                 
-                crate::bridge::emit_log("INFO", "[Rust] SwitchToken: DONE, monitor started".into());
+                crate::bridge::emit_log("INFO", "[Core.Engine] SwitchToken: DONE, monitor started".into());
             }
 
             EngineCommand::UnsubscribeToken { token_address } => {
                 // Отписка от токена - очистка состояния
-                emit_log("INFO", format!("📭 Отписка от токена: {}", token_address));
+                emit_log("INFO", format!("[Core.Engine] 📭 Unsubscribing from a token: {}", token_address));
                 
                 let mut s = CORE_STATE.write().unwrap();
                 s.selected_pool_address = None;
@@ -199,7 +199,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 s.selected_pool_liquidity_usd = 0.0;
                 s.selected_pool_spot_price = 0.0;
                 
-                emit_log("SUCCESS", "📭 Состояние токена очищено".into());
+                emit_log("SUCCESS", "[Core.Engine] 📭 The token state has been cleared.".into());
             }
             
             EngineCommand::CalcImpact { token_address, quote_address, amount_in, is_buy } => {
@@ -246,7 +246,6 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                             !s.v3_states.is_empty() && s.selected_pool_address.is_some()
                         };
                         if !has_v3_state {
-                            emit_log("DEBUG", "CalcImpact: V3 pool not selected, skipping quoter".to_string());
                             U256::zero()
                         } else {
                             execution::calculate_expected_out_v3_quoted(t_in, t_out, amt_wei, p_fee, quoter).await 
@@ -258,7 +257,6 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                             !s.v2_reserves.is_empty() && s.selected_pool_address.is_some()
                         };
                         if !has_v2_reserves {
-                            emit_log("DEBUG", "CalcImpact: V2 pool not selected".to_string());
                             U256::zero()
                         } else {
                             execution::calculate_expected_out_v2_pure(t_in, t_out, amt_wei) 
@@ -312,19 +310,19 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
                 
                 if let Some(enabled) = fuel_enabled {
                     s.fuel_enabled = enabled;
-                    emit_log("INFO", format!("⛽ Auto-Fuel: {}", if enabled { "ВКЛЮЧЕН" } else { "ВЫКЛЮЧЕН" }));
+                    emit_log("INFO", format!("[Core.Engine] ⛽ Auto-Fuel: {}", if enabled { "ON" } else { "OFF" }));
                 }
                 
                 if let Some(quote_addr_str) = fuel_quote_address {
                     if let Ok(quote_addr) = Address::from_str(&quote_addr_str) {
                         s.fuel_quote_address = quote_addr;
-                        emit_log("INFO", format!("🔄 Quote токен для мониторинга: {:?}", quote_addr));
+                        emit_log("INFO", format!("[Core.Engine] 🔄 Quote token for monitoring: {:?}", quote_addr));
                     }
                 }
                 
                 if let Some(sym) = quote_symbol {
                     s.quote_symbol = sym.clone();
-                    emit_log("INFO", format!("💱 Quote symbol обновлен: {}", sym));
+                    emit_log("INFO", format!("[Core.Engine] 💱 Quote symbol updated: {}", sym));
                 }
                 
                 if let Some(new_rpc) = rpc_url {
@@ -387,7 +385,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
             EngineCommand::AddWallet { address, private_key } => {
                 if let Ok(addr) = Address::from_str(&address) {
                     CORE_STATE.write().unwrap().wallet_keys.insert(addr, private_key);
-                    emit_log("INFO", format!("🔑 Кошелек добавлен: {:?}", addr));
+                    emit_log("INFO", format!("[Core.Engine] 🔑 Wallet added: {:?}", addr));
                 }
             }
             
@@ -446,7 +444,7 @@ async fn engine_loop(mut rx: mpsc::UnboundedReceiver<EngineCommand>) {
 
 /// Отправка команды в engine (для Ring Buffer)
 pub fn send_command(cmd: EngineCommand) {
-    emit_log("DEBUG", format!("[Rust] send_command: {:?}", std::mem::discriminant(&cmd)));
+    emit_log("DEBUG", format!("[Core.Engine] send_command: {:?}", std::mem::discriminant(&cmd)));
     let _ = COMMAND_TX.send(cmd);
 }
 

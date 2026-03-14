@@ -16,15 +16,15 @@ class MarketDataService:
         self.exchange: Optional[ccxtpro.binance] = None
 
     def start(self):
-        """Запуск воркера цен Binance"""
+        """Launch of the Binance Price Worker"""
         if self._is_running:
             return
         self._is_running = True
         self.worker_task = asyncio.create_task(self._quotes_price_worker())
-        asyncio.create_task(log.info("MarketDataService: Запущен воркер цен Binance."))
+        asyncio.create_task(log.info("MarketDataService: Binance Price Worker Launched."))
 
     async def stop(self):
-        """Полная остановка"""
+        """Full stop"""
         self._is_running = False
         if self.worker_task:
             self.worker_task.cancel()
@@ -33,12 +33,11 @@ class MarketDataService:
                 await self.exchange.close()
             except:
                 pass
-        asyncio.create_task(log.info("MarketDataService: Остановлен."))
+        asyncio.create_task(log.info("MarketDataService: Stopped."))
 
     async def _quotes_price_worker(self):
         """
-        Получает цены с Binance и транслирует их в Rust 
-        для реактивного расчета PnL и TVL.
+        Fetches prices from Binance and translates them into Rust for reactive PnL and TVL calculation.
         """
         self.exchange = ccxtpro.binance()
         symbols = self.config.ERC20_QUOTES_TICKERS
@@ -72,5 +71,5 @@ class MarketDataService:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                await log.error(f"MarketDataService (Binance): Ошибка получения цен: {e}")
+                await log.error(f"MarketDataService (Binance): Error retrieving prices: {e}")
                 await asyncio.sleep(5)

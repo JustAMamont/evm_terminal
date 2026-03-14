@@ -110,14 +110,13 @@ async fn prefetch_all_data(
     token: Address,
     quote: Address
 ) {
-    emit_log("INFO", "⚡ HTTP Prefetch: Начинаем загрузку начальных данных...".into());
+    emit_log("INFO", "[Core.Monitor] ⚡ HTTP Prefetch: Starting to load initial data...".into());
     let start = Instant::now();
     
     let gas_provider = provider.clone();
     let gas_price = gas_provider.get_gas_price().await.ok();
     if let Some(gas) = gas_price {
         CORE_STATE.write().unwrap().gas_price = gas;
-        emit_log("DEBUG", format!("⚡ Prefetch: Gas price = {} Gwei", gas.as_u64() / 1_000_000_000));
     }
     
     let mut native_balance_tasks = Vec::with_capacity(wallets.len());
@@ -217,8 +216,6 @@ async fn prefetch_all_data(
         
         let results = futures::future::join_all(pool_tasks).await;
         let candidates: Vec<_> = results.into_iter().flatten().collect();
-        
-        emit_log("DEBUG", format!("📊 candidates: {}", candidates.len()));
 
         if let Some(best) = select_best_pool(candidates, DEFAULT_TRADE_USD) {
             {
@@ -231,9 +228,6 @@ async fn prefetch_all_data(
             }
             
             let (token_symbol, token_name) = execution::get_token_info(token).await;
-            let pool_type = best.pool_type.clone();
-            let pool_address = best.address;
-            let liquidity_usd = best.liquidity_usd;
 
             emit_event(EngineEvent::PoolDetected { 
                 pool_type: best.pool_type, 
@@ -246,12 +240,11 @@ async fn prefetch_all_data(
                 token_symbol,
                 token_name
             });
-            emit_log("DEBUG", format!("Лучший пул: {:?}, тип: {}, Liq.: {} $", pool_address, pool_type, liquidity_usd));
         }
     }
     
     let elapsed = start.elapsed();
-    emit_log("SUCCESS", format!("⚡ HTTP Prefetch завершен за {}ms", elapsed.as_millis()));
+    emit_log("SUCCESS", format!("[Core.Monitor] ⚡ HTTP Prefetch completed in {}ms", elapsed.as_millis()));
 }
 
 // ===================== WEBSOCKET MANAGER =====================
@@ -286,15 +279,15 @@ impl WebSocketManager {
         
         loop {
             if SHUTDOWN_FLAG.load(std::sync::atomic::Ordering::Relaxed) { 
-                emit_log("INFO", "🔌 WebSocket: Shutdown signal received".into());
+                emit_log("INFO", "[Core.Monitor] 🔌 WebSocket: Shutdown signal received".into());
                 break; 
             }
             
             attempt += 1;
-            emit_log("INFO", format!("🔌 WebSocket: Попытка подключения #{} к {}", attempt, self.wss_url));
+            emit_log("INFO", format!("[Core.Monitor] 🔌 WebSocket: Attempt to connect #{} к {}", attempt, self.wss_url));
             emit_event(EngineEvent::ConnectionStatus {
                 connected: false,
-                message: format!("Подключение... (попытка #{})", attempt)
+                message: format!("Connection... (attempt #{})", attempt)
             });
             
             if let Some(http_provider) = self.get_http_provider().await {
@@ -317,10 +310,10 @@ impl WebSocketManager {
                     self.provider = Some(ws.clone());
                     
                     attempt = 0;
-                    emit_log("SUCCESS", "🔌 WebSocket: Подключено успешно!".into());
+                    emit_log("SUCCESS", "[Core.Monitor] 🔌 WebSocket: Connected successfully!".into());
                     emit_event(EngineEvent::ConnectionStatus {
                         connected: true,
-                        message: "WebSocket подключен".into()
+                        message: "WebSocket connected".into()
                     });
                     
                     let reason = self.run_subscriptions_and_wait(
@@ -333,16 +326,16 @@ impl WebSocketManager {
                     
                     match &reason {
                         DisconnectReason::StreamEnded(stream_name) => {
-                            emit_log("WARNING", format!("🔌 WebSocket: Поток '{}' завершён, переподключение...", stream_name));
+                            emit_log("WARNING", format!("[Core.Monitor] 🔌 WebSocket: Thread '{}' terminated, reconnect...", stream_name));
                         }
                         DisconnectReason::Error(err) => {
-                            emit_log("ERROR", format!("🔌 WebSocket: Ошибка - {}, переподключение...", err));
+                            emit_log("ERROR", format!("[Core.Monitor] 🔌 WebSocket: Error - {}, reconnect...", err));
                         }
                         DisconnectReason::IdleTimeout => {
-                            emit_log("WARNING", "🔌 WebSocket: Нет данных более 30 сек, переподключение...".into());
+                            emit_log("WARNING", "[Core.Monitor] 🔌 WebSocket: No data for more than 30 seconds, reconnect...".into());
                         }
                         DisconnectReason::Shutdown => {
-                            emit_log("INFO", "🔌 WebSocket: Завершение работы".into());
+                            emit_log("INFO", "[Core.Monitor] 🔌 WebSocket: Сonnection canceled".into());
                             break;
                         }
                     }
@@ -353,16 +346,16 @@ impl WebSocketManager {
                     });
                 }
                 Err(e) => {
-                    emit_log("ERROR", format!("🔌 WebSocket: Ошибка подключения - {:?}", e));
+                    emit_log("ERROR", format!("[Core.Monitor] 🔌 WebSocket: Connection error - {:?}", e));
                     emit_event(EngineEvent::ConnectionStatus {
                         connected: false,
-                        message: format!("Ошибка подключения: {:?}", e)
+                        message: format!("Connection error: {:?}", e)
                     });
                 }
             }
             
             let delay = std::cmp::min(RECONNECT_DELAY_SECS * (1 + attempt / 3) as u64, 30);
-            emit_log("INFO", format!("🔌 WebSocket: Повторное подключение через {} сек...", delay));
+            emit_log("INFO", format!("[Core.Monitor] 🔌 WebSocket: Reconnecting in {} seconds...", delay));
             sleep(Duration::from_secs(delay)).await;
         }
     }
@@ -395,7 +388,7 @@ impl WebSocketManager {
         let blocks_task = tokio::spawn(async move {
             match ws_blocks.subscribe_blocks().await {
                 Ok(mut block_stream) => {
-                    emit_log("INFO", "📡 Подписка на блоки активна".into());
+                    emit_log("INFO", "[Core.Monitor] 📡 Block subscription is active".into());
                     let idle_timeout = Duration::from_secs(IDLE_TIMEOUT_SECS);
                     
                     loop {
@@ -488,7 +481,7 @@ impl WebSocketManager {
                 
             match ws_transfers.subscribe_logs(&filter).await {
                 Ok(mut transfer_stream) => {
-                    emit_log("INFO", "📡 Подписка на Transfer события активна".into());
+                    emit_log("INFO", "[Core.Monitor] 📡 Subscription to 'Transfer' events is active".into());
                     
                     while let Some(log) = transfer_stream.next().await {
                         if SHUTDOWN_FLAG.load(std::sync::atomic::Ordering::Relaxed) {
@@ -573,7 +566,7 @@ impl WebSocketManager {
             let filter = Filter::new().address(pools_list.clone());
             match ws_pools.subscribe_logs(&filter).await {
                 Ok(mut pool_stream) => {
-                    emit_log("INFO", format!("📡 Подписка на {} пул(ов) активна", pools_list.len()));
+                    emit_log("INFO", format!("[Core.Monitor] 📡 Subscription to {} pool(s) is active", pools_list.len()));
                     
                     while let Some(log) = pool_stream.next().await {
                         if SHUTDOWN_FLAG.load(std::sync::atomic::Ordering::Relaxed) {
@@ -661,7 +654,7 @@ impl WebSocketManager {
         let ws_pending = ws.clone();
         
         let pending_txs_task = tokio::spawn(async move {
-            emit_log("INFO", "📡 Подписка на pending transactions активна".into());
+            emit_log("INFO", "[Core.Monitor] 📡 Subscription to pending transactions is active".into());
             let mut check_interval = interval(Duration::from_millis(500));
             
             loop {
@@ -687,7 +680,7 @@ impl WebSocketManager {
                             let block_num = receipt.block_number.unwrap_or(U64::zero()).as_u64();
                             let from_addr = receipt.from;
                             
-                            emit_log("INFO", format!("✅ TX подтверждена: {:?} (статус: {})", tx_hash, status));
+                            emit_log("INFO", format!("[Core.Monitor] ✅ TX has been confirmed: {:?} (status: {})", tx_hash, status));
                             
                             emit_event(EngineEvent::TxConfirmed {
                                 tx_hash: format!("{:?}", tx_hash),
@@ -702,7 +695,7 @@ impl WebSocketManager {
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            emit_log("WARNING", format!("Ошибка проверки receipt {:?}: {:?}", tx_hash, e));
+                            emit_log("ERROR", format!("[Core.Monitor] Transaction data validation error {:?}: {:?}", tx_hash, e));
                         }
                     }
                 }
@@ -788,18 +781,11 @@ fn calculate_v3_liquidity_usd_and_price(
 }
 
 fn select_best_pool(mut candidates: Vec<PoolCandidate>, trade_amount_usd: f64) -> Option<PoolCandidate> {
-    emit_log("DEBUG", format!("📊 select_best_pool: {} candidates до фильтра", candidates.len()));
-    for p in &candidates {
-        emit_log("DEBUG", format!("  - {:?}: type={}, liq={}", p.address, p.pool_type, p.liquidity_usd));
-    }
-    
     if candidates.is_empty() { return None; }
     candidates.retain(|p| p.liquidity_usd > 10.0);
     
-    emit_log("DEBUG", format!("📊 select_best_pool: {} candidates после фильтра (liq > 10)", candidates.len()));
-    
     if candidates.is_empty() { 
-        emit_log("WARNING", "⚠️ Все пулы отфильтрованы (liq <= 10)".into());
+        emit_log("WARNING", "[Core.Monitor] ⚠️ All pools are filtered (liq <= 10)".into());
         return None; 
     }
     candidates.retain(|p| p.liquidity_usd > 10.0);
@@ -822,8 +808,6 @@ pub async fn discover_pools(token: Address, quote: Address) -> Vec<Address> {
     let (v2_f, v3_f) = { let s = CORE_STATE.read().unwrap(); (s.v2_factory_address, s.v3_factory_address) };
     let rpc_urls = { RPC_POOL.read().get_fastest_pool(5) };
     
-    emit_log("DEBUG", format!("discover_pools: {} RPC URLs", rpc_urls.len()));
-    
     // Выбираем первый рабочий RPC
     let provider_http = {
         let mut result = None;
@@ -842,7 +826,7 @@ pub async fn discover_pools(token: Address, quote: Address) -> Vec<Address> {
     let p = match provider_http {
         Some(provider) => provider,
         None => {
-            emit_log("ERROR", "NO PROVIDER - all RPCs failed!".to_string());
+            emit_log("ERROR", "[Core.Monitor] NO PROVIDER - all RPCs failed!".to_string());
             return targets;
         }
     };
@@ -857,7 +841,6 @@ pub async fn discover_pools(token: Address, quote: Address) -> Vec<Address> {
         let f = UniversalABI::new(v2_f, p_v2);
         match timeout(Duration::from_secs(3), f.get_pair(token, quote).call()).await {
             Ok(Ok(pair)) if pair != Address::zero() => {
-                emit_log("DEBUG", format!("V2 pool: {:?}", pair));
                 Some(pair)
             }
             _ => None
@@ -872,7 +855,6 @@ pub async fn discover_pools(token: Address, quote: Address) -> Vec<Address> {
             let f = UniversalABI::new(v3_f, p);
             match timeout(Duration::from_secs(3), f.get_pool(token, quote, fee).call()).await {
                 Ok(Ok(pool)) if pool != Address::zero() => {
-                    emit_log("DEBUG", format!("V3 pool fee={}: {:?}", fee, pool));
                     CORE_STATE.write().unwrap().v3_states.insert(pool, V3PoolState { 
                         pool_fee: fee, ..Default::default() 
                     });
@@ -896,8 +878,6 @@ pub async fn discover_pools(token: Address, quote: Address) -> Vec<Address> {
             targets.push(pool);
         }
     }
-    
-    emit_log("DEBUG", format!("discover_pools: {} targets found", targets.len()));
     targets
 }
 
@@ -907,14 +887,14 @@ pub async fn start_unified_websocket_monitor(
     quote: Address,
     all_quotes: Vec<(String, Address)>
 ) {
-    emit_log("INFO", format!("🚀 Поиск пулов для токена {:?}", token));
+    emit_log("INFO", format!("[Core.Monitor] 🚀 Search fot pools for {:?}", token));
     
     // Ищем пулы для выбранного quote
     let pools_for_selected = discover_pools(token, quote).await;
     let has_pools = pools_for_selected.len() > 1;
     
     if has_pools {
-        emit_log("SUCCESS", format!("✅ Найдено {} пулов", pools_for_selected.len() - 1));
+        emit_log("SUCCESS", format!("[Core.Monitor] ✅ {} pools found", pools_for_selected.len() - 1));
         let wallets: Vec<Address> = TRACKED_WALLETS.read().unwrap().clone();
         let mut ws_manager = WebSocketManager::new(wss_url);
         ws_manager.run_forever(wallets, quote, pools_for_selected, token, quote).await;
@@ -922,7 +902,7 @@ pub async fn start_unified_websocket_monitor(
     }
     
     // Пулов нет для выбранного - ищем по другим quote
-    emit_log("WARNING", "⚠️ Пулы не найдены для выбранного quote".to_string());
+    emit_log("WARNING", "[Core.Monitor] ⚠️ No pools were found for the selected quote token.".to_string());
     
     let mut found_quotes: Vec<(String, Address)> = vec![];
     for (sym, q_addr) in all_quotes.iter() {
@@ -934,7 +914,7 @@ pub async fn start_unified_websocket_monitor(
     }
     
     if found_quotes.is_empty() {
-        emit_log("ERROR", "❌ Пулы не найдены ни для одного quote токена".to_string());
+        emit_log("ERROR", "[Core.Monitor] ❌ No pools for any of the quote tokens were found.".to_string());
         emit_event(EngineEvent::PoolNotFound { 
             token: format!("{:?}", token), 
             selected_quote: CORE_STATE.read().unwrap().quote_symbol.clone(),
@@ -944,7 +924,7 @@ pub async fn start_unified_websocket_monitor(
     }
     
     let symbols: Vec<String> = found_quotes.iter().map(|(s, _)| s.clone()).collect();
-    emit_log("WARNING", format!("⚠️ Пулы найдены для: {}", symbols.join(", ")));
+    emit_log("WARNING", format!("[Core.Monitor] ⚠️ Pools found for: {}", symbols.join(", ")));
     
     emit_event(EngineEvent::PoolNotFound { 
         token: format!("{:?}", token), 

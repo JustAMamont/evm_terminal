@@ -23,6 +23,9 @@ from bot.core.config import Config
 from bot.core.integrities import load_resource_bundle, enumerate_adapters
 from bot.core.bridge import BridgeManager, EngineCommand, AutoFuelSettings
 
+# === i18n for Auth ===
+from tui.lang import set_language, ta, get_language_from_db
+
 console = Console()
 SHUTDOWN_REQUESTED = False
 USER_INITIATED_SHUTDOWN = False
@@ -39,25 +42,27 @@ def force_restore_terminal():
     except: pass
 
 async def secure_db_unlock(db_manager: DatabaseManager, network_name: str) -> str:
-    console.print(f"\n[bold cyan]--- АВТОРИЗАЦИЯ: Сеть {network_name.upper()} ---[/bold cyan]")
+    """Unlock database with localized auth messages."""
+    console.print(f"\n[bold cyan]--- {ta('auth_title', network_name.upper())} ---[/bold cyan]")
+    
     if not await db_manager.is_encrypted():
-        console.print("[bold yellow]ВНИМАНИЕ: Придумайте и введите мастер-пароль![/bold yellow]\n[dim yellow]   (Пароль используется для шифрования ключей в БД)[/dim yellow]")
+        console.print(f"[bold yellow]{ta('auth_new_password_warning')}[/bold yellow]\n[dim yellow]   {ta('auth_password_hint')}[/dim yellow]")
         while True:
-            pwd1 = Prompt.ask("Новый пароль", password=True)
-            pwd2 = Prompt.ask("Повторите пароль", password=True)
+            pwd1 = Prompt.ask(ta('auth_new_password'), password=True)
+            pwd2 = Prompt.ask(ta('auth_repeat_password'), password=True)
             if pwd1 == pwd2 and len(pwd1) > 0:
                 await db_manager.set_password(pwd1)
                 return pwd1
             else:
-                console.print("[bold red]Пароли не совпадают. Попробуйте снова.[/bold red]")
+                console.print(f"[bold red]{ta('auth_passwords_mismatch')}[/bold red]")
     else:
         attempts = 3
         while attempts > 0:
-            pwd = Prompt.ask(f"Введите ваш пароль", password=True)
+            pwd = Prompt.ask(ta('auth_enter_password'), password=True)
             if await db_manager.unlock_db(pwd):
                 return pwd
             attempts -= 1
-            console.print(f"[bold red]Неверный пароль. Осталось попыток: {attempts}[/bold red]")
+            console.print(f"[bold red]{ta('auth_wrong_password', attempts)}[/bold red]")
         sys.exit(1)
 
 async def save_last_network(db_manager: DatabaseManager, network_name: str):
@@ -93,6 +98,10 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
     )
     await db_manager.connect()
     
+    # === LOAD LANGUAGE BEFORE AUTH ===
+    lang = await get_language_from_db(db_manager)
+    set_language(lang)
+    
     await save_last_network(db_manager, network_name)
     
     try:
@@ -101,7 +110,7 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
         await db_manager.close()
         os._exit(0)
     except Exception as e:
-        print(f"\nКритическая ошибка авторизации: {e}")
+        print(f"\n{ta('auth_critical_error', e)}")
         await db_manager.close()
         sys.exit(1)
 
@@ -139,7 +148,7 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
             private_key = db_manager.security.decrypt(w['private_key'])
             wallets_for_rust.append((w['address'], private_key))
         except Exception:
-            await log.error(f"Не удалось расшифровать ключ для {w['address']}")
+            await log.error(f"Failed to decrypt key for {w['address']}")
             continue
     
     user_rpc = config_db.get('rpc_url')
@@ -147,12 +156,12 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
 
     if requires_private and not user_rpc:
         await log.error("="*60)
-        await log.error("⚠️  Для данной сети (BSC Testnet) ОБЯЗАТЕЛЕН приватный RPC!")
-        await log.error("   Публичные RPC не поддерживают WebSocket.")
-        await log.error("   Введите приватный RPC endpoint в Settings → RPC URL")
+        await log.error("This network (BSC Testnet) REQUIRES a private RPC!")
+        await log.error("Public RPCs do not support WebSocket.")
+        await log.error("Enter a private RPC endpoint in Settings -> RPC URL")
         await log.error("="*60)
         TUI_APP_INSTANCE.notify(
-            "⚠️ Для BSC Testnet обязателен приватный RPC!\n(Chainstack, Infura, etc.)\nНастройте в Settings",
+            "Private RPC required for BSC Testnet!\n(Chainstack, Infura, etc.)\nConfigure in Settings",
             severity="error",
             timeout=30
         )
@@ -195,8 +204,8 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
         fuel_enabled=fuel.auto_fuel_enabled
     ))
 
-    await log.info(f"--- Ядро Rust инициализировано для сети: {app_config.NAME} ---")
-    await log.info(f"--- Quote токен: {default_quote} ({quote_address[:10]}...) ---")
+    await log.info(f"--- Rust core initialized for network: {app_config.NAME} ---")
+    await log.info(f"--- Quote token: {default_quote} ({quote_address[:10]}...) ---")
 
     market_data_service = MarketDataService(cache=cache, config=app_config)
     market_data_service.bridge = bridge
@@ -206,7 +215,7 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
 
     next_network = await TUI_APP_INSTANCE.run_async()
     
-    # Не сохраняем RESTART_SAME_NETWORK в БД
+    # Don't save RESTART_SAME_NETWORK to DB
     if next_network and next_network != "RESTART_SAME_NETWORK":
         await save_last_network(db_manager, next_network)
 
@@ -216,17 +225,14 @@ async def run_bot_instance(network_name: str, available_networks: list) -> Optio
     
     TUI_APP_INSTANCE = None
     
-    # Отладка
-    #await log.debug(f"[BOT RELOAD] next_network={next_network}, USER_INITIATED_SHUTDOWN={USER_INITIATED_SHUTDOWN}, current={network_name}")
-    
-    # ПОЛНЫЙ ПЕРЕЗАПУСК при смене сети ИЛИ при RESTART_SAME_NETWORK
+    # FULL RESTART on network change OR RESTART_SAME_NETWORK
     should_restart = next_network and not USER_INITIATED_SHUTDOWN
     is_network_change = next_network != network_name and next_network != "RESTART_SAME_NETWORK"
     is_same_network_restart = next_network == "RESTART_SAME_NETWORK"
     
     if should_restart and (is_network_change or is_same_network_restart):
         actual_network = network_name if is_same_network_restart else next_network
-        await log.info(f"Перезапуск для сети: {actual_network}")
+        await log.info(f"Restarting for network: {actual_network}")
         await asyncio.sleep(1)
         os.execv(sys.executable, [sys.executable] + sys.argv)
     
@@ -252,7 +258,7 @@ async def main_loop():
                 break
             
             if USER_INITIATED_SHUTDOWN:
-                await log.info("Пользователь инициировал завершение (Ctrl+C). Выход...")
+                await log.info("User initiated shutdown (Ctrl+C). Exiting...")
                 break
             
             if next_net and next_net in available_networks:
@@ -289,7 +295,7 @@ def run():
     try:
         loop.run_until_complete(main_loop())
     except Exception as e:
-        asyncio.run(log.critical("Критическая ошибка запуска", exc_info=True))
+        asyncio.run(log.critical("Critical startup error", exc_info=True))
     finally:
         loop.close()
         force_restore_terminal()

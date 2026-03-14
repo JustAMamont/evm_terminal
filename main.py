@@ -22,23 +22,7 @@ try:
     os.environ['SSL_CERT_FILE'] = certifi.where()
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 except ImportError:
-    print("Ошибка импорта certifi")
-
-def set_high_priority():
-    try:
-        import psutil
-        p = psutil.Process(os.getpid())
-        if sys.platform == "win32":
-            p.nice(psutil.HIGH_PRIORITY_CLASS)
-        else:
-            try:
-                p.nice(-10)
-            except psutil.AccessDenied:
-                print("Ошибка в повышении приоритета приложения")
-    except ImportError:
-        print("Ошибка импорта psutil")
-    except Exception:
-        traceback.print_exc()
+    print("Error importing certifi")
 
 def ensure_terminal_linux():
     if sys.platform == "win32" or sys.platform == "darwin": return
@@ -50,7 +34,7 @@ def ensure_terminal_linux():
         bash_cmd = (f"echo -ne '\\033]2;EVM_TRADER\\007'; "
                     f"cd '{exe_dir}'; "
                     f"'{exe_path}'; "
-                    f"echo -e '\\n\\nПрограмма завершила работу. Нажмите Enter для выхода.'; read line")
+                    f"echo -e '\\n\\nThe program has completed. Press Enter to exit.'; read line")
 
         terminals = [
             ("gnome-terminal", ["--", "bash", "-c", bash_cmd]),
@@ -87,7 +71,7 @@ def ensure_terminal_mac():
 
         cmd_bash = (f"echo -ne '\\033]2;EVM_TRADER\\007'; "
                f"export DEXBOT_IN_TERMINAL=1; "
-               f"cd \\\"{exe_dir}\\\"; \\\"{exe_path}\\\"; read -p 'Программа завершена. Нажмите Enter для выхода...' ")
+               f"cd \\\"{exe_dir}\\\"; \\\"{exe_path}\\\"; read -p 'The program has completed. Press Enter to exit...' ")
 
         applescript = f'tell application "Terminal" to do script "{cmd_bash}" activate'
         
@@ -116,7 +100,6 @@ else:
 
 if __name__ == "__main__":
     set_terminal_title("EVM_TRADER")
-    set_high_priority()
 
     if uvloop:
         uvloop.install()
@@ -125,10 +108,10 @@ if __name__ == "__main__":
         import bot.bot
         bot.bot.run()
     except KeyboardInterrupt:
-        print("\nЗапуск отменен.")
+        print("\nLaunch cancelled.")
         sys.exit(0)
     except Exception as e:
-        print(f"Критическая ошибка инициализации: {e}")
+        print(f"Critical initialization error: {e}")
         import traceback
         traceback.print_exc()
-        input("Нажмите Enter для выхода... ")
+        input("Press Enter to exit... ")

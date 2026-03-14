@@ -107,14 +107,14 @@ class GlobalCache:
             #        await log.debug(f"[MEMORY POS] {k[:30]}... | cost={v['cost']} | amount={v['amount']}")
             
             if restored_count > 0 or pos_count > 0:
-                await log.info(f"Восстановлено {restored_count} балансов и {pos_count} позиций из БД.")
+                await log.info(f"{restored_count} balances and {pos_count} positions were restored from the database.")
 
-        await log.info(f"Кэш инициализирован. Загружено конфигов: {len(self.config)}, кошельков: {len(self._wallets)}")
+        await log.info(f"Cache initialized. Configs loaded: {len(self.config)}, wallets: {len(self._wallets)}")
 
     # --- БЫСТРЫЕ МЕТОДЫ БАЛАНСОВ (из памяти) ---
     
     def set_exact_balance_wei(self, wallet_address: str, token_address: str, balance_wei: int):
-        """Установить баланс (из WebSocket события) - мгновенно"""
+        """Set balance (from WebSocket event)"""
         wallet_addr_lower = wallet_address.lower()
         token_addr_lower = token_address.lower()
         if wallet_addr_lower not in self._exact_balances_wei:
@@ -122,7 +122,7 @@ class GlobalCache:
         self._exact_balances_wei[wallet_addr_lower][token_addr_lower] = balance_wei
 
     def get_exact_balance_wei(self, wallet_address: str, token_address: str) -> Optional[int]:
-        """Получить баланс из кэша - мгновенно"""
+        """Get balance from cash"""
         return self._exact_balances_wei.get(wallet_address.lower(), {}).get(token_address.lower())
 
     def add_token_balance(self, wallet_address: str, token_address: str, amount_wei: int, decimals: int = 18, save_to_db: bool = True) -> int:
@@ -200,7 +200,7 @@ class GlobalCache:
     # --- УПРАВЛЕНИЕ ПОЗИЦИЯМИ (RAM + Async DB) ---
 
     def update_position_memory(self, wallet: str, token: str, added_cost: int, added_amount: int):
-        """Обновляет позицию в памяти и БД"""
+        """Updates the position in memory and the database"""
         w = wallet.lower()
         t = token.lower()
         key = f"{w}:{t}"
@@ -223,28 +223,22 @@ class GlobalCache:
 
 
     def close_position_memory(self, wallet: str, token: str):
-        """Полностью закрывает позицию"""
+        """Closes the position completely"""
         key = f"{wallet.lower()}:{token.lower()}"
         
         if key in self._positions:
-            #old_pos = self._positions[key]
-            #asyncio.create_task(log.debug(
-            #    f"[POSITION CLOSE] {wallet[:8]}... | REMOVED cost={old_pos['cost']}, amount={old_pos['amount']}"
-            #))
             del self._positions[key]
-        #else:
-        #    asyncio.create_task(log.debug(f"[POSITION CLOSE] {wallet[:8]}... | KEY NOT FOUND in memory!"))
         
         asyncio.create_task(self.db.close_position(wallet, token))
 
 
     def get_position_memory(self, wallet: str, token: str) -> Dict[str, int]:
-        """Мгновенное получение позиции из памяти"""
+        """Instantly retrieve a position from memory"""
         key = f"{wallet.lower()}:{token.lower()}"
         return self._positions.get(key, {'cost': 0, 'amount': 0})
 
     def get_open_positions_tokens(self) -> List[Tuple[str, str]]:
-        """Возвращает список (wallet, token) для открытых позиций с amount > 0"""
+        """Returns a list of (wallet, token) for open positions with amount > 0"""
         result = []
         for key, pos in self._positions.items():
             if pos.get('amount', 0) > 0:
@@ -362,11 +356,11 @@ class GlobalCache:
         return {"status": "deleted"}
 
     def get_token_metadata_cached(self, token_address: str) -> Optional[Dict[str, Any]]:
-        """Получить метаданные токена из кэша - мгновенно, без БД"""
+        """Get token metadata from cache - instantly, without a database"""
         return self._token_metadata_cache.get(token_address.lower())
 
     def set_token_metadata_cache(self, token_address: str, symbol: Optional[str] = None, name: Optional[str] = None, decimals: Optional[int] = None):
-        """Сохранить метаданные токена в кэш"""
+        """Save token metadata to cache"""
         addr = token_address.lower()
         if addr not in self._token_metadata_cache:
             self._token_metadata_cache[addr] = {}
@@ -398,7 +392,7 @@ class GlobalCache:
         return None
 
     async def dump_state_to_db(self):
-        """Сохраняет текущие известные балансы в базу данных перед выходом."""
+        """Saves current known balances to the database before exiting"""
         async with self._lock:
             count = 0
             for w_addr, tokens_map in self._exact_balances_wei.items():
@@ -409,4 +403,4 @@ class GlobalCache:
                         await self.db.save_cached_balance(w_addr, t_addr, wei, decimals)
                         count += 1
             if count > 0:
-                await log.info(f"Сохранено {count} записей балансов в БД перед выходом.")
+                await log.info(f"{count} balance records saved in the database.")

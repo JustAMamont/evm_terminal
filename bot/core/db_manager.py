@@ -7,7 +7,7 @@ from utils.aiologger import log
 
 SENSITIVE_KEYS = {'rpc_url'}
 # Четко определяем ключи, которые ВСЕГДА идут в глобальную БД
-GLOBAL_KEYS = {'last_network', 'system_tag', 'user_agreement_accepted'}
+GLOBAL_KEYS = {'last_network', 'system_tag', 'user_agreement_accepted', 'language'}
 
 class DatabaseManager:
     def __init__(self, db_path: str, global_db_path: str = "data/global.db"):
@@ -327,8 +327,6 @@ class DatabaseManager:
         w = wallet.lower()
         t = token.lower()
         
-        await log.debug(f"[DB SET_POS] w={w[:10]}... | t={t[:10]}... | cost={total_cost_wei} | amount={total_amount_wei}")
-        
         async with self.conn.cursor() as cursor:
             await cursor.execute("""
                 INSERT INTO active_positions (wallet_address, token_address, total_cost_wei, total_amount_wei)
@@ -350,14 +348,6 @@ class DatabaseManager:
             await cursor.execute("SELECT wallet_address, token_address, total_cost_wei, total_amount_wei FROM active_positions")
             rows = await cursor.fetchall()
         results = [dict(row) for row in rows]
-        
-        # DEBUG: Что в БД
-        for r in results:
-            w = r.get('wallet_address', '')[:10]
-            t = r.get('token_address', '')[:10]
-            c = r.get('total_cost_wei', '0')
-            a = r.get('total_amount_wei', '0')
-            asyncio.create_task(log.debug(f"[DB POS] wallet={w}... | token={t}... | cost_wei={c} | amount_wei={a}"))
         
         return results
 

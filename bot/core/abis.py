@@ -19,7 +19,7 @@ try:
     V2_FACTORY_ABI = orjson.loads(_V2_FACTORY_ABI_JSON)
     V3_FACTORY_ABI = orjson.loads(_V3_FACTORY_ABI_JSON)
 except orjson.JSONDecodeError as e:
-    print(f"Критическая ошибка: не удалось распарсить ABI. {e}")
+    print(f"Critical error: Failed to parse ABI. {e}")
     ERC20_ABI = []
     PANCAKESWAP_V2_ROUTER_ABI = []
     V2_FACTORY_ABI = []

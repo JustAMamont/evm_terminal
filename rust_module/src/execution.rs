@@ -107,7 +107,7 @@ pub async fn check_and_auto_approve_background(token: Address, quote: Address) {
                     if let Ok(allowance) = erc20.allowance(w_addr, router).call().await {
                         CORE_STATE.write().unwrap().approved_tokens.insert((w_addr, *t_addr), ());
                         if allowance < (U256::max_value() / 2) {
-                            emit_log("INFO", format!("🛡️ Фоновый Check: Апрув для {:?}...", w_addr));
+                            emit_log("INFO", format!("[Core.Executor] 🛡️ Background check: approval for {:?}...", w_addr));
                             
                             // Восстановленная логика фонового апрува
                             if let Ok(wallet) = pk.parse::<LocalWallet>() {
@@ -150,7 +150,7 @@ pub fn calculate_expected_out_v2_pure(token_in: Address, token_out: Address, amo
     let pool_addr = match s.selected_pool_address {
         Some(addr) => addr,
         None => {
-            emit_log("WARNING", "calculate_expected_out_v2_pure: selected_pool_address is None".to_string());
+            emit_log("WARNING", "[Core.Executor] calculate_expected_out_v2_pure: selected_pool_address is None".to_string());
             return U256::zero();
         }
     };
@@ -158,13 +158,13 @@ pub fn calculate_expected_out_v2_pure(token_in: Address, token_out: Address, amo
     let (r0, r1) = match s.v2_reserves.get(&pool_addr) {
         Some(reserves) => reserves.clone(),
         None => {
-            emit_log("WARNING", format!("calculate_expected_out_v2_pure: no reserves for pool {:?}", pool_addr));
+            emit_log("WARNING", format!("[Core.Executor] calculate_expected_out_v2_pure: no reserves for pool {:?}", pool_addr));
             return U256::zero();
         }
     };
     
     if r0.is_zero() || r1.is_zero() {
-        emit_log("WARNING", "calculate_expected_out_v2_pure: zero reserves".to_string());
+        emit_log("WARNING", "[Core.Executor] calculate_expected_out_v2_pure: zero reserves".to_string());
         return U256::zero();
     }
     
@@ -222,11 +222,10 @@ pub async fn calculate_expected_out_v3_quoted(
             
             match quoter_contract.quote_exact_input_single(params).call().await {
                 Ok((amount_out, _, _, _)) => {
-                    emit_log("DEBUG", format!("V3 quoter result: {}", amount_out));
                     return amount_out;
                 }
                 Err(e) => {
-                    emit_log("WARNING", format!("V3 quoter error: {:?}", e));
+                    emit_log("WARNING", format!("[Core.Executor] V3 quoter error: {:?}", e));
                 }
             }
         }
@@ -236,7 +235,6 @@ pub async fn calculate_expected_out_v3_quoted(
 
 /// Вычисляет идеальный выход на основе спотовой цены (без учёта slippage/impact)
 pub fn calculate_ideal_out(_token_in: Address, _token_out: Address, amount_in: U256, decimals_in: u8, is_buy: bool, decimals_out: u8) -> U256 {
-    // emit_log("DEBUG", format!("ideal_out: in={:?}, out={:?}, is_buy={}", _token_in, _token_out, is_buy));
     if amount_in.is_zero() { return U256::zero(); }
     
     let s = CORE_STATE.read().unwrap();
@@ -278,8 +276,6 @@ pub async fn run_batch_trade(
     chain_id: u64,
     amounts_wei: Option<std::collections::HashMap<String, String>>
 ) -> Vec<EngineEvent> {
-    let start_time = std::time::Instant::now();
-    emit_log("DEBUG", format!("[TRADE] START | action={} | amount={} | gas_gwei={}", action, amount, gas));
     let mut events = Vec::with_capacity(keys.len());
     let (p_type, p_fee) = { 
         let s = CORE_STATE.read().unwrap(); 
@@ -359,9 +355,8 @@ pub async fn run_batch_trade(
             continue;
         }
         
-        let t_nonce = std::time::Instant::now();
+        //let t_nonce = std::time::Instant::now();
         let nonce = { *CORE_STATE.read().unwrap().nonce_map.get(&wallet_addr).unwrap_or(&0) };
-        emit_log("DEBUG", format!("[TRADE] NONCE | {}ms | nonce={}", t_nonce.elapsed().as_millis(), nonce));
         let deadline = U256::from(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -373,7 +368,6 @@ pub async fn run_batch_trade(
         if action == "sell" {
             // Сначала проверяем кэш - если токен уже апрувнут, пропускаем RPC
             if !CORE_STATE.read().unwrap().approved_tokens.contains_key(&(wallet_addr, t_in)) {
-                let t_allow = std::time::Instant::now();
                 let mut allowance = U256::zero();
                 
                 // RPC проверка только если нет в кэше
@@ -384,12 +378,11 @@ pub async fn run_batch_trade(
                         if let Ok(a) = erc20.allowance(wallet_addr, router).call().await {
                             allowance = a;
                         }
-                        emit_log("DEBUG", format!("[TRADE] ALLOWANCE RPC | {}ms | allowance={}", t_allow.elapsed().as_millis(), allowance));
                     }
                 }
                 
                 if allowance < amount_wei {
-                    emit_log("WARNING", format!("🛡️ Auto-Approve required for {:?} (allowance: {})", wallet_addr, allowance));
+                    emit_log("WARNING", format!("[Core.Executor] 🛡️ Auto-Approve required for {:?} (allowance: {})", wallet_addr, allowance));
                     
                     // Construct Approve Transaction INSTEAD of Swap
                     let erc20_dummy = IERC20::new(t_in, Arc::new(Provider::new(Http::new(Url::parse("http://localhost").unwrap()))));
@@ -446,14 +439,12 @@ pub async fn run_batch_trade(
         // ===================================================================================
         
         // Извлекаем quoter ПЕРЕД await
-        let t_exp = std::time::Instant::now();
         let exp_out = if p_type == "V3" {
             let quoter = CORE_STATE.read().unwrap().quoter_address;
             calculate_expected_out_v3_quoted(t_in, t_out, amount_wei, p_fee, quoter).await
         } else {
             calculate_expected_out_v2_pure(t_in, t_out, amount_wei)
         };
-        emit_log("DEBUG", format!("[TRADE] EXPECTED_OUT | {}ms | pool_type={} | exp_out={}", t_exp.elapsed().as_millis(), p_type, exp_out));
         
         // Безопасное вычисление min_out
         let slippage_factor = (10000.0 - slippage * 100.0).max(0.0).min(10000.0) as u64;
@@ -491,9 +482,7 @@ pub async fn run_batch_trade(
         
         if let Ok(sig) = wallet.sign_transaction_sync(&typed_tx) {
             let raw_tx = typed_tx.rlp_signed(&sig);
-            let t_broadcast = std::time::Instant::now();
             let hash = parallel_broadcast(raw_tx.clone()).await;
-            emit_log("DEBUG", format!("[TRADE] BROADCAST | {}ms | hash={}", t_broadcast.elapsed().as_millis(), &hash[..16]));
             
             let is_success = hash.starts_with("0x");
             
@@ -531,15 +520,13 @@ pub async fn run_batch_trade(
             });
         }
     }
-    emit_log("DEBUG", format!("[TRADE] TOTAL | {}ms | events={}", start_time.elapsed().as_millis(), events.len()));
     events
 }
 
 /// Параллельная отправка транзакции на несколько RPC
 async fn parallel_broadcast(data: Bytes) -> String {
-    let t_start = std::time::Instant::now();
+    //let t_start = std::time::Instant::now();
     let urls = { RPC_POOL.read().get_fastest_pool(3) };
-    emit_log("DEBUG", format!("[BROADCAST] START | {} nodes", urls.len()));
 
     let mut tasks = Vec::new();
     
@@ -559,11 +546,9 @@ async fn parallel_broadcast(data: Bytes) -> String {
     
     for res in join_all(tasks).await { 
         if let Ok(Ok(h)) = res {
-            emit_log("DEBUG", format!("[BROADCAST] SUCCESS | {}ms", t_start.elapsed().as_millis()));
             return h;
         }
     }
-    emit_log("DEBUG", format!("[BROADCAST] FAILED | {}ms", t_start.elapsed().as_millis()));
     "Error: all RPCs failed".into()
 }
 
@@ -588,7 +573,7 @@ pub async fn run_auto_fuel(
     
     // === WBNB → прямой withdraw ===
     if quote == w_n {
-        emit_log("INFO", format!("⛽ Auto-Fuel: withdraw {} WBNB → BNB", amount));
+        emit_log("INFO", format!("[Core.Executor] ⛽ Auto-Fuel: withdraw {} WBNB → BNB", amount));
         
         let withdraw_sig = ethers::utils::keccak256("withdraw(uint256)".as_bytes());
         let mut calldata: Vec<u8> = withdraw_sig[..4].to_vec();
@@ -611,7 +596,7 @@ pub async fn run_auto_fuel(
         if let Ok(sig) = wallet_signer.sign_transaction_sync(&typed_tx) { 
             let raw_tx = typed_tx.rlp_signed(&sig);
             let hash = parallel_broadcast(raw_tx).await;
-            emit_log("INFO", format!("⛽ Auto-Fuel withdraw tx: {}", hash));
+            emit_log("INFO", format!("[Core.Executor] ⛽ Auto-Fuel withdraw tx: {}", hash));
             
             if hash.starts_with("0x") {
                 let tx_hash: H256 = hash.parse().unwrap_or(H256::zero());
@@ -624,7 +609,7 @@ pub async fn run_auto_fuel(
     }
     
     // === Swap через TaxRouter ===
-    emit_log("INFO", format!("⛽ Auto-Fuel: swap {:?} → BNB via TaxRouter", quote));
+    emit_log("INFO", format!("[Core.Executor] ⛽ Auto-Fuel: swap {:?} → NATIVE via TaxRouter", quote));
     
     let url_opt = { RPC_POOL.read().get_fastest_node() };
     if let Some(url) = url_opt {
@@ -635,9 +620,9 @@ pub async fn run_auto_fuel(
             // Проверяем баланс токена
             if let Ok(balance) = erc20.balance_of(wallet).call().await {
                 if balance < amount {
-                    let reason = format!("Недостаточно токена: есть {:.6}, нужно {:.6}", 
+                    let reason = format!("Not enough tokens:: {:.6} available, {:.6} needed",
                         u256_to_f64_safe(balance, 18), u256_to_f64_safe(amount, 18));
-                    emit_log("ERROR", format!("⛽ Auto-Fuel: {}", reason));
+                    emit_log("ERROR", format!("[Core.Executor] ⛽ Auto-Fuel: {}", reason));
                     emit_event(EngineEvent::AutoFuelError {
                         wallet: format!("{:?}", wallet),
                         reason,
@@ -649,7 +634,7 @@ pub async fn run_auto_fuel(
             // Проверяем и делаем approve если нужно
             if let Ok(allowance) = erc20.allowance(wallet, router).call().await {
                 if allowance < amount {
-                    emit_log("INFO", "⛽ Auto-Fuel: требуется approve...".to_string());
+                    emit_log("INFO", "[Core.Executor] ⛽ Auto-Fuel: approve needed...".to_string());
                     
                     let nonce = { 
                         let s = CORE_STATE.read().unwrap(); 
@@ -670,13 +655,13 @@ pub async fn run_auto_fuel(
                     if let Ok(sig) = wallet_signer.sign_transaction_sync(&typed_tx) {
                         let raw_tx = typed_tx.rlp_signed(&sig);
                         let hash = parallel_broadcast(raw_tx).await;
-                        emit_log("INFO", format!("⛽ Auto-Fuel approve tx: {}", hash));
+                        emit_log("INFO", format!("[Core.Executor] ⛽ Auto-Fuel approve tx: {}", hash));
                         
                         if hash.starts_with("0x") {
                             CORE_STATE.write().unwrap().nonce_map.insert(wallet, nonce + 1);
                             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         } else {
-                            let reason = "Approve failed: все RPC недоступны".to_string();
+                            let reason = "Approve failed: all RPCs are unavailable".to_string();
                             emit_event(EngineEvent::AutoFuelError {
                                 wallet: format!("{:?}", wallet),
                                 reason: reason.clone(),
@@ -726,7 +711,7 @@ pub async fn run_auto_fuel(
                 let hash = parallel_broadcast(raw_tx).await;
                 
                 if hash.starts_with("0x") {
-                    emit_log("SUCCESS", format!("⛽ Auto-Fuel swap tx: {}", hash));
+                    emit_log("SUCCESS", format!("[Core.Executor] ⛽ Auto-Fuel swap tx: {}", hash));
                     
                     let tx_hash: H256 = hash.parse().unwrap_or(H256::zero());
                     CORE_STATE.write().unwrap().pending_txs.insert(tx_hash);
@@ -743,7 +728,7 @@ pub async fn run_auto_fuel(
                     
                     return true;
                 } else {
-                    let reason = "Swap failed: все RPC недоступны".to_string();
+                    let reason = "Swap failed: all RPCs are unavailable".to_string();
                     emit_event(EngineEvent::AutoFuelError {
                         wallet: format!("{:?}", wallet),
                         reason,

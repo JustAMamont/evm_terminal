@@ -247,27 +247,27 @@ class LoggerProxy:
         await self._ensure_initialized()
         cast(AsyncLogger, self._real_logger).custom_handler = handler
 
-    async def debug(self, message: Any, to_console: bool = True, to_file: bool = True, exc_info: bool = False) -> None:
+    async def debug(self, message: Any, to_console: bool = False, to_file: bool = True, exc_info: bool = False) -> None:
         await self._ensure_initialized()
         await cast(AsyncLogger, self._real_logger).debug(message, to_console, to_file, exc_info)
 
-    async def info(self, message: Any, to_console: bool = True, to_file: bool = True, exc_info: bool = False) -> None:
+    async def info(self, message: Any, to_console: bool = False, to_file: bool = True, exc_info: bool = False) -> None:
         await self._ensure_initialized()
         await cast(AsyncLogger, self._real_logger).info(message, to_console, to_file, exc_info)
 
-    async def success(self, message: Any, to_console: bool = True, to_file: bool = True, exc_info: bool = False) -> None:
+    async def success(self, message: Any, to_console: bool = False, to_file: bool = True, exc_info: bool = False) -> None:
         await self._ensure_initialized()
         await cast(AsyncLogger, self._real_logger).success(message, to_console, to_file, exc_info)
         
-    async def warning(self, message: Any, to_console: bool = True, to_file: bool = True, exc_info: bool = False) -> None:
+    async def warning(self, message: Any, to_console: bool = False, to_file: bool = True, exc_info: bool = False) -> None:
         await self._ensure_initialized()
         await cast(AsyncLogger, self._real_logger).warning(message, to_console, to_file, exc_info)
 
-    async def error(self, message: Any, to_console: bool = True, to_file: bool = True, exc_info: bool = False) -> None:
+    async def error(self, message: Any, to_console: bool = False, to_file: bool = True, exc_info: bool = False) -> None:
         await self._ensure_initialized()
         await cast(AsyncLogger, self._real_logger).error(message, to_console, to_file, exc_info)
 
-    async def critical(self, message: Any, to_console: bool = True, to_file: bool = True, exc_info: bool = False) -> None:
+    async def critical(self, message: Any, to_console: bool = False, to_file: bool = True, exc_info: bool = False) -> None:
         await self._ensure_initialized()
         await cast(AsyncLogger, self._real_logger).critical(message, to_console, to_file, exc_info)
 

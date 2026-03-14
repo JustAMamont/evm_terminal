@@ -32,18 +32,6 @@ static LAST_IMPACT: Lazy<RwLock<Option<u64>>> = Lazy::new(|| RwLock::new(None));
 
 // ===================== ASYNC INTERNAL FUNCTIONS =====================
 
-//async fn push_command_async(data: Vec<u8>) -> bool {
-//    let result = COMMAND_RING.push(&data).is_ok();
-//    if result {
-//        COMMAND_NOTIFY.notify_one();
-//    }
-//    result
-//}
-
-//async fn pop_event_async() -> Option<Vec<u8>> {
-//    EVENT_RING.pop()
-//}
-
 async fn pop_from_bridge_async() -> Option<String> {
     BRIDGE_QUEUE.1.try_recv().ok()
 }
