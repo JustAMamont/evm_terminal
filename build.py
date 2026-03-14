@@ -9,7 +9,7 @@ import platform
 from typing import Set, Iterable
 import Cython.Compiler.Options
 
-# Запрещаем докстринги компилятору Cython
+# Disable docstrings for Cython compiler
 Cython.Compiler.Options.docstrings = False
 
 # --- CONFIG ---
@@ -19,6 +19,29 @@ SANDBOX_DIR = os.path.join(PROJECT_DIR, "_build_zone")
 RUST_MODULE_DIR = os.path.join(PROJECT_DIR, "rust_module")
 MAIN_FILE = "main.py"
 BUILD_NAME = "EVM_TERMINAL"
+
+# Critical modules that MUST be included (even if auto-detection fails)
+CRITICAL_MODULES = [
+    # TUI
+    "tui.app",
+    "tui.lang",
+    "tui.help",
+    # Bot core
+    "bot.bot",
+    "bot.cache",
+    "bot.core.bridge",
+    "bot.core.config",
+    "bot.core.db_manager",
+    "bot.core.abis",
+    "bot.core.integrities",
+    # Bot services
+    "bot.services.market_data_service",
+    # Utils
+    "utils.security",
+    "utils.aiologger",
+    # Rust module
+    "dexbot_core",
+]
 
 
 def ignore_db_files(directory: str, files: Iterable[str]) -> Set[str]:
@@ -100,8 +123,8 @@ def get_extensions_in_sandbox():
 
 
 def compile_cython():
-    # NOTE: Легаси функция для защиты от реверс-инжиниринга (как один из дополнительных слоев). 
-    # Оставлена, так как немного экономит место на жестком диске
+    # NOTE: Legacy function for reverse engineering protection (additional layer).
+    # Kept for slight disk space savings.
     print("--- Compiling Cython modules (.so files) ---")
     os.chdir(SANDBOX_DIR)
     try:
@@ -123,13 +146,15 @@ def run_pyinstaller():
     cmd = [
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--console",
         "--name", BUILD_NAME, "--clean",
+        # TUI styles
         f"--add-data", f"tui/app.css{sep}tui",
+        # Data directory (for db files at runtime)
         f"--add-data", f"data{sep}data", 
+        # Network configurations (JSON files required by Rust core)
         f"--add-data", f"networks{sep}networks",
-        "--hidden-import", "dexbot_core"
     ]
     
-    # ИКОНКА
+    # Icon
     icon_ico = os.path.join(MEDIA_DIR, "icon.ico")
     icon_icns = os.path.join(MEDIA_DIR, "icon.icns")
     if sys.platform == 'win32' and os.path.exists(icon_ico):
@@ -137,7 +162,7 @@ def run_pyinstaller():
     elif sys.platform == 'darwin' and os.path.exists(icon_icns):
         cmd.extend(["--icon", icon_icns])
 
-    # Сбор всех внешних пакетов из requirements.txt
+    # Collect all third-party packages from requirements.txt
     print("--- Collecting third-party packages ---")
     req_file = os.path.join(PROJECT_DIR, 'requirements.txt')
     try:
@@ -150,8 +175,13 @@ def run_pyinstaller():
                     cmd.extend(["--collect-all", package_name])
     except: pass
 
-    # ПРИНУДИТЕЛЬНЫЙ СБОР ВСЕХ МОДУЛЕЙ ПРОЕКТА
-    print("--- Collecting all project modules ---")
+    # CRITICAL: Add all hidden-imports for project modules
+    print("--- Adding critical module imports ---")
+    for module in CRITICAL_MODULES:
+        cmd.extend(["--hidden-import", module])
+
+    # Also scan for all .py files in project roots
+    print("--- Scanning project modules ---")
     project_roots = ("bot", "tui", "utils", "networks")
     for root, _, files in os.walk("."):
         rel_path = os.path.relpath(root, ".")
@@ -160,7 +190,9 @@ def run_pyinstaller():
             if file.endswith(".py"):
                 module_path = os.path.join(rel_path, os.path.splitext(file)[0])
                 module_name = module_path.replace(os.sep, '.')
-                cmd.extend(["--hidden-import", module_name])
+                # Avoid duplicates with CRITICAL_MODULES
+                if module_name not in CRITICAL_MODULES:
+                    cmd.extend(["--hidden-import", module_name])
 
     cmd.append(MAIN_FILE)
     print(f"Executing PyInstaller...")
@@ -187,11 +219,11 @@ def move_binary_back():
             if os.path.isdir(dst): shutil.rmtree(dst)
             else: os.remove(dst)
         
-        # 1. Перемещаем основную папку сборки
+        # Move main build folder
         shutil.move(source_folder, dst)
         
-        # 2. ПРИНУДИТЕЛЬНО КОПИРУЕМ NETWORKS В КОРЕНЬ БИЛДА
-        # Rust ищет ./networks, поэтому она должна лежать рядом с бинарником
+        # FORCE COPY networks to build root
+        # Rust looks for ./networks, so it must be next to the binary
         networks_src = os.path.join(PROJECT_DIR, "networks")
         networks_dst = os.path.join(dst, "networks")
         
@@ -200,6 +232,13 @@ def move_binary_back():
                 shutil.rmtree(networks_dst)
             shutil.copytree(networks_src, networks_dst)
             print(f"Manually copied 'networks' folder to: {networks_dst}")
+            
+            # Verify JSON files are present
+            json_files = [f for f in os.listdir(networks_dst) if f.endswith('.json')]
+            if json_files:
+                print(f"Network configs found: {json_files}")
+            else:
+                print("[WARN] No JSON files found in networks folder!")
         else:
             print("[WARN] Original 'networks' folder not found! Bot will silent exit.")
 
