@@ -31,34 +31,77 @@ High-speed trading terminal (TUI) for DEX. Python + Rust hybrid.
 
 ```
 +----------------------- PYTHON LAYER ------------------------+
+|                        bot/bot.py                           |
+|                    (Main Orchestrator)                      |
 |                                                             |
-|  +------------+     +--------------+     +---------------+  |
-|  | TUI        |     | GlobalCache  |     | BridgeManager |  |
-|  | (Textual)  |---->| - Balances   |---->| - Commands    |  |
-|  | - Render   |     | - Positions  |     | - Events      |  |
-|  | - Input    |     | - PnL        |     |               |  |
-|  +------------+     +--------------+     +---------------+  |
+|  +------------------+    +-------------------+              |
+|  | DatabaseManager  |    |   GlobalCache     |              |
+|  | (bot/core/db)    |    |   (bot/cache)     |              |
+|  |                  |    |                   |              |
+|  | Network DB:      |    | Memory Cache:     |              |
+|  | - wallets        |--->| - balances (wei)  |              |
+|  | - positions      |    | - positions       |              |
+|  | - cached_pools   |    | - best_pools      |              |
+|  | - config         |    | - token_metadata  |              |
+|  |                  |    +-------------------+              |
+|  | Global DB:       |              |                        |
+|  | - security (pwd) |              v                        |
+|  | - last_network   |    +-------------------+              |
+|  | - language       |    |  BridgeManager    |              |
+|  +------------------+    |  (bot/core/bridge)|              |
+|                          |                   |              |
+|  +------------------+    | EngineCommand:    |              |
+|  | Config           |    | - init()          |              |
+|  | (bot/core/config)|    | - execute_trade() |              |
+|  |                  |    | - switch_token()  |              |
+|  | From network JSON|    | - calc_impact()   |              |
+|  +------------------+    +--------|----------+              |
+|                                   |                         |
+|  +------------------+    +--------|----------+              |
+|  | MarketDataService|    |   TradingApp      |              |
+|  | (bot/services)   |    |   (tui/app.py)    |              |
+|  |                  |    |                   |              |
+|  | Binance ccxt.pro |    | Textual TUI:      |              |
+|  | Quote prices USD |    | - Trade tab       |              |
+|  +------------------+    | - Wallets tab     |              |
+|                          | - Settings tab    |              |
+|  +------------------+    | - Logs tab        |              |
+|  | SecurityManager  |    | - Help tab        |              |
+|  | (utils/security) |    |                   |              |
+|  |                  |    | tui/lang.py:      |              |
+|  | PBKDF2 480K iter |    | - EN/RU i18n      |              |
+|  | Fernet (AES)     |    |                   |              |
+|  +------------------+    +-------------------+              |
 |                                                             |
 +---------------------------|---------------------------------+
                             | PyO3 FFI
 +---------------------------|---------------------------------+
 |                     RUST CORE (dexbot_core)                 |
 |                                                             |
-|  EVENT LOOP                                                 |
-|  +-- Nonce Monitor (prefetch)    --> 0ms execution          |
-|  +-- GasPrice Monitor (prefetch) --> 0ms execution          |
-|  +-- WebSocket Client                                       |
-|      +-- Pool Updates                                       |
-|      +-- Balance Updates                                    |
+|  STATE (CoreState)                                          |
+|  +-- nonce (prefetch from pending tx)                       |
+|  +-- gas_price (prefetch via eth_gasPrice)                  |
+|  +-- wallet_keys (address -> private_key)                   |
+|  +-- tracked_tokens (subscribed token addresses)            |
+|                                                             |
+|  EVENT LOOP (tokio runtime)                                 |
+|  +-- WebSocket Client (pool updates, balance updates)       |
+|  +-- RPC Health Checker (latency monitoring)                |
+|  +-- Background Worker (WSS subscription management)        |
 |                                                             |
 |  RPC POOL                                                   |
 |  +-- [Node1] [Node2] [Node3] --> Smart routing by latency   |
 |                                                             |
 |  EXECUTION ENGINE                                           |
-|  +-- Transaction signing (secp256k1)                        |
-|  +-- Nonce management                                       |
-|  +-- Auto-approve for sell                                  |
-|  +-- Event deduplication                                    |
+|  +-- Transaction signing (secp256k1, k256)                  |
+|  +-- Nonce management (atomic, prefetch)                    |
+|  +-- Auto-approve for sell (ERC20 approve)                  |
+|  +-- Auto-fuel (swap quote -> native for gas)               |
+|                                                             |
+|  BRIDGE (Python FFI)                                        |
+|  +-- Ring buffer (event queue)                              |
+|  +-- Command parser (binary protocol)                       |
+|  +-- Event emitter (EngineReady, BalanceUpdate, etc.)       |
 |                                                             |
 +---------------------------|---------------------------------+
                             v
@@ -72,39 +115,60 @@ High-speed trading terminal (TUI) for DEX. Python + Rust hybrid.
 User presses "BUY"
         |
         v
-TUI: action_execute
-  +-- Validation
-  +-- Collect data
+TUI: action_execute_trade()
+  +-- Validation (address, amount, wallets enabled)
+  +-- Collect data (token, quote, wallets, amounts)
         |
-        | EngineCommand.ExecuteTrade
+        | EngineCommand.ExecuteTrade { token, quote, is_buy, amounts, ... }
         v
 BridgeManager.send()
-  +-- JSON serialization
-  +-- Crossbeam channel
+  +-- Binary serialization (pack_u16, pack_string, ...)
+  +-- Crossbeam channel to Rust
         |
         v
-RUST: Execution Engine
-  +-- 1. Get nonce from CORE_STATE (RAM)    <-- prefetch, 0ms
-  +-- 2. Get gas_price from CORE_STATE      <-- prefetch, 0ms
-  +-- 3. Sign tx (secp256k1)                <-- ~50us
-  +-- 4. Select fastest RPC node            <-- smart pool
-  +-- 5. sendRawTransaction
+RUST: handle_command()
+  +-- 1. Get nonce from CoreState (RAM)     <-- prefetch, 0ms
+  +-- 2. Get gas_price from CoreState       <-- prefetch, 0ms
+  +-- 3. Build tx (encode function call)
+  +-- 4. Sign tx (secp256k1, ~50us)
+  +-- 5. Select fastest RPC node            <-- smart pool
+  +-- 6. sendRawTransaction
         |
         v
 EVM Mempool (Latency: 0.3-0.7s)
         |
         v
-RUST: Event -> Python
-  +-- TxSent
-  +-- TxConfirmed
-  +-- BalanceUpdate
+RUST: WebSocket Event
+  +-- TxSent -> emit to Python
+  +-- TxConfirmed -> emit to Python
+  +-- BalanceUpdate -> emit to Python
+        |
+        v
+Python: handle_rust_event()
+  +-- _evt_tx_sent() -> TxStatusTracker.record()
+  +-- _evt_tx_confirmed() -> notification, PnL update
+  +-- _evt_balance_update() -> GlobalCache update, UI refresh
         |
         v
 TUI: UI Update
-  +-- Transaction status
-  +-- Balance
-  +-- PnL
+  +-- Transaction status notification
+  +-- Balance table refresh
+  +-- Position memory update
 ```
+
+### Key Components
+
+| Component | File | Description |
+|-----------|------|-------------|
+| **Main Orchestrator** | `bot/bot.py` | Entry point, auth, initialization, shutdown |
+| **DatabaseManager** | `bot/core/db_manager.py` | SQLite operations, dual DB (network + global) |
+| **GlobalCache** | `bot/cache.py` | In-memory cache for balances, positions, pools |
+| **BridgeManager** | `bot/core/bridge.py` | Python ↔ Rust communication, command packing |
+| **Config** | `bot/core/config.py` | Network configuration from JSON |
+| **TradingApp** | `tui/app.py` | Textual TUI, event handlers, user interaction |
+| **MarketDataService** | `bot/services/market_data_service.py` | Binance price feed via ccxt.pro |
+| **SecurityManager** | `utils/security.py` | AES encryption, PBKDF2 key derivation |
+| **i18n** | `tui/lang.py` | EN/RU translations |
 
 ---
 

@@ -4,6 +4,17 @@ Terminal text interface based on **Textual**. Event-driven architecture with rea
 
 ---
 
+## Module Files
+
+| File | Description |
+|------|-------------|
+| `app.py` | TradingApp class, event handlers, UI logic |
+| `app.css` | Textual CSS styles for components |
+| `lang.py` | Internationalization (EN/RU translations) |
+| `help.py` | Help content for Help tab |
+
+---
+
 ## Architecture
 
 ```
@@ -38,6 +49,58 @@ Terminal text interface based on **Textual**. Event-driven architecture with rea
 
 ---
 
+## Internationalization (i18n)
+
+File: `lang.py`
+
+Supports **EN** (English) and **RU** (Russian) languages.
+
+### Functions
+
+```python
+def t(key: str) -> str:
+    """Get translation for key based on current language."""
+
+def ta(key: str, *args) -> str:
+    """Get translation with arguments (format string)."""
+
+def set_language(lang: str):
+    """Set current language (EN or RU)."""
+
+async def get_language_from_db(db: DatabaseManager) -> str:
+    """Load language from global.db, defaults to EN."""
+```
+
+### Usage Example
+
+```python
+from tui.lang import t, ta
+
+# Simple translation
+label = t("btn_buy")  # "BUY" or "КУПИТЬ"
+
+# Translation with arguments
+msg = ta("auth_wrong_password", attempts)  # "Wrong password. Attempts left: 3"
+```
+
+### Language Storage
+
+Language preference is stored in `global.db` → `global_settings` table:
+```sql
+INSERT INTO global_settings (key, value) VALUES ('language', 'RU');
+```
+
+Changing language in Settings triggers app restart (via `RESTART_SAME_NETWORK`).
+
+### Adding New Language
+
+1. Add language code to `TRANSLATIONS` dict in `lang.py`
+2. Copy all keys from existing language
+3. Translate values
+4. Add language option to Settings dropdown in `app.py`
+
+---
+
 ## Components
 
 ### Status Bar
@@ -54,9 +117,9 @@ Terminal text interface based on **Textual**. Event-driven architecture with rea
 ```
 trade_tab     --> Token input, amount, BUY/SELL panels, market data
 wallets_tab   --> Wallets table, add form
-settings_tab  --> RPC, quote currency, auto-fuel, slippage, gas
+settings_tab  --> RPC, quote currency, language, auto-fuel, slippage, gas
 logs_tab      --> RichLog with 500 message buffer
-help_tab      --> Markdown help
+help_tab      --> Markdown help (EN/RU)
 ```
 
 ---
@@ -276,4 +339,3 @@ Key classes:
 | `FloatValidator` | Gas, Slippage | Number > 0 |
 | `IntegerValidator` | Gas Limit | Integer > 0 |
 | `AddressValidator` | `#token_input` | `0x[a-fA-F0-9]{40}` |
-
